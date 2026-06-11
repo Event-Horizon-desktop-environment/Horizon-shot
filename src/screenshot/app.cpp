@@ -95,13 +95,19 @@ static void on_shm_release(void* user)
 
 static void refresh_window_list(AppState& app)
 {
-  HS_LOG("refresh_window_list: enter");
+  HS_LOG("refresh_window_list: enter xwayland=%d has_ext=%d has_wlr=%d",
+         app.wl.has_xwayland(),
+         app.wl.has_ext_foreign_toplevel_list(),
+         app.wl.has_wlr_foreign_toplevel_manager());
   app.window_list.clear();
 
   if (app.wl.has_ext_foreign_toplevel_list()) {
-    HS_LOG("refresh_window_list: %zu ext toplevels found", app.wl.ext_foreign_toplevels().list().size());
     const auto& toplevels = app.wl.ext_foreign_toplevels().list();
+    HS_LOG("refresh_window_list: %zu ext toplevels found", toplevels.size());
     for (const auto& tl : toplevels) {
+      std::string xw = tl.appId.find("XWayland") != std::string::npos ? " [XWayland]" : "";
+      HS_LOG("refresh_window_list:   ext window handle=%p title='%s' app_id='%s' identifier='%s'%s",
+             (void*)tl.handle, tl.title.c_str(), tl.appId.c_str(), tl.identifier.c_str(), xw.c_str());
       WindowEntry entry;
       entry.handle = tl.handle;
       entry.appId = tl.appId;
@@ -110,9 +116,12 @@ static void refresh_window_list(AppState& app)
       app.window_list.push_back(std::move(entry));
     }
   } else if (app.wl.has_wlr_foreign_toplevel_manager()) {
-    HS_LOG("refresh_window_list: %zu wlr toplevels found", app.wl.wlr_foreign_toplevels().list().size());
     const auto& toplevels = app.wl.wlr_foreign_toplevels().list();
+    HS_LOG("refresh_window_list: %zu wlr toplevels found", toplevels.size());
     for (const auto& tl : toplevels) {
+      std::string xw = tl.appId.find("XWayland") != std::string::npos ? " [XWayland]" : "";
+      HS_LOG("refresh_window_list:   wlr window handle=%p title='%s' app_id='%s' activated=%d parent=%p%s",
+             (void*)tl.handle, tl.title.c_str(), tl.appId.c_str(), tl.activated, (void*)tl.parent, xw.c_str());
       WindowEntry entry;
       entry.handle = nullptr;
       entry.wlr_handle = tl.handle;
@@ -123,6 +132,10 @@ static void refresh_window_list(AppState& app)
   } else {
     HS_LOG("refresh_window_list: no toplevel list available");
     return;
+  }
+
+  if (app.window_list.empty()) {
+    HS_LOG("refresh_window_list: WARNING — window list is empty after refresh");
   }
 
   if (app.source == Source::Window && app.selected_window_idx < 0 && !app.window_list.empty()) {

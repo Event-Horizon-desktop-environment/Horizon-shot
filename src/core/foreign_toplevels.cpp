@@ -58,6 +58,7 @@ void ExtForeignToplevels::on_toplevel(void* data, ext_foreign_toplevel_list_v1*,
   Toplevel tl;
   tl.handle = handle;
   self.toplevels_.push_back(std::move(tl));
+  HS_LOG("ExtForeignToplevels::on_toplevel: now %zu toplevels tracked", self.toplevels_.size());
 
   static const ext_foreign_toplevel_handle_v1_listener kHandleListener = {
       .closed = on_closed,
@@ -86,39 +87,56 @@ void ExtForeignToplevels::on_closed(void* data, ext_foreign_toplevel_handle_v1* 
   auto& self = *static_cast<ExtForeignToplevels*>(data);
   auto it = std::remove_if(self.toplevels_.begin(), self.toplevels_.end(),
                             [handle](const Toplevel& t) { return t.handle == handle; });
-  if (it != self.toplevels_.end()) {
+  bool found = (it != self.toplevels_.end());
+  if (found) {
     self.toplevels_.erase(it, self.toplevels_.end());
   }
+  HS_LOG("ExtForeignToplevels::on_closed: found=%d remaining=%zu", found, self.toplevels_.size());
   if (handle) {
     if (self.display_ && wl_display_get_error(self.display_)) return;
     ext_foreign_toplevel_handle_v1_destroy(handle);
   }
 }
 
-void ExtForeignToplevels::on_done(void*, ext_foreign_toplevel_handle_v1*) {}
+void ExtForeignToplevels::on_done(void* data, ext_foreign_toplevel_handle_v1* handle)
+{
+  HS_LOG("ExtForeignToplevels::on_done handle=%p", (void*)handle);
+  auto& self = *static_cast<ExtForeignToplevels*>(data);
+  for (const auto& tl : self.toplevels_) {
+    if (tl.handle == handle) {
+      std::string xw = tl.appId.find("XWayland") != std::string::npos ? " [XWayland]" : "";
+      HS_LOG("ExtForeignToplevels::on_done: window ready%s title='%s' app_id='%s' identifier='%s'",
+             xw.c_str(), tl.title.c_str(), tl.appId.c_str(), tl.identifier.c_str());
+      break;
+    }
+  }
+}
 
 void ExtForeignToplevels::on_title(void* data, ext_foreign_toplevel_handle_v1* handle, const char* title)
 {
   auto& self = *static_cast<ExtForeignToplevels*>(data);
   for (auto& tl : self.toplevels_) {
-    if (tl.handle == handle) { tl.title = title ? title : ""; return; }
+    if (tl.handle == handle) { tl.title = title ? title : ""; HS_LOG("ExtForeignToplevels::on_title handle=%p title='%s'", (void*)handle, tl.title.c_str()); return; }
   }
+  HS_LOG("ExtForeignToplevels::on_title handle=%p — NOT FOUND in toplevels", (void*)handle);
 }
 
 void ExtForeignToplevels::on_app_id(void* data, ext_foreign_toplevel_handle_v1* handle, const char* app_id)
 {
   auto& self = *static_cast<ExtForeignToplevels*>(data);
   for (auto& tl : self.toplevels_) {
-    if (tl.handle == handle) { tl.appId = app_id ? app_id : ""; return; }
+    if (tl.handle == handle) { tl.appId = app_id ? app_id : ""; HS_LOG("ExtForeignToplevels::on_app_id handle=%p app_id='%s'", (void*)handle, tl.appId.c_str()); return; }
   }
+  HS_LOG("ExtForeignToplevels::on_app_id handle=%p — NOT FOUND in toplevels", (void*)handle);
 }
 
 void ExtForeignToplevels::on_identifier(void* data, ext_foreign_toplevel_handle_v1* handle, const char* identifier)
 {
   auto& self = *static_cast<ExtForeignToplevels*>(data);
   for (auto& tl : self.toplevels_) {
-    if (tl.handle == handle) { tl.identifier = identifier ? identifier : ""; return; }
+    if (tl.handle == handle) { tl.identifier = identifier ? identifier : ""; HS_LOG("ExtForeignToplevels::on_identifier handle=%p identifier='%s'", (void*)handle, tl.identifier.c_str()); return; }
   }
+  HS_LOG("ExtForeignToplevels::on_identifier handle=%p — NOT FOUND in toplevels", (void*)handle);
 }
 
 }

@@ -61,7 +61,7 @@ bool WaylandConnection::connect()
   HS_LOG("connect: ext_data_ctrl=%p wlr_data_ctrl=%p linux_dmabuf=%p ext_toplevel_list=%p wlr_toplevel_mgr=%p",
          (void*)extDataControlMgr_, (void*)wlrDataControlMgr_,
          (void*)linuxDmabuf_, (void*)extForeignToplevelList_, (void*)wlrForeignToplevelMgr_);
-  HS_LOG("connect: %zu tracked outputs", tracked_outputs_.size());
+  HS_LOG("connect: %zu tracked outputs, xwayland=%d", tracked_outputs_.size(), hasXWayland_);
 
   return true;
 }
@@ -114,6 +114,7 @@ void WaylandConnection::disconnect()
   linuxDmabuf_ = nullptr;
   extForeignToplevelList_ = nullptr;
   wlrForeignToplevelMgr_ = nullptr;
+  hasXWayland_ = false;
 }
 
 static void xdg_output_name(void* data, struct zxdg_output_v1*, const char* name)
@@ -288,6 +289,8 @@ void WaylandConnection::registry_global(void* data, wl_registry* registry, uint3
     if (self.extForeignToplevelList_) {
       self.extForeignToplevels_.bind(self.extForeignToplevelList_, self.display_);
     }
+  } else if (std::strcmp(iface, "xwayland_shell_v1") == 0) {
+    self.hasXWayland_ = true;
   } else if (std::strcmp(iface, wl_output_interface.name) == 0) {
     auto slot = std::make_unique<OutputSlot>();
     slot->output = static_cast<wl_output*>(wl_registry_bind(registry, name, &wl_output_interface, std::min(version, 4u)));

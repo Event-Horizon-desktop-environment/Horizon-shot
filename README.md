@@ -56,3 +56,5 @@ horizon-shot --select   # region selection
 horizon-shot --focused  # capture focused window
 horizon-shot --all      # capture all screens
 ```
+
+See [Usage](Docs/Usage.md) for all options and examples.

@@ -79,6 +79,7 @@ public:
   bool has_ext_foreign_toplevel_list() const { return extForeignToplevelList_ != nullptr; }
   bool has_wlr_foreign_toplevel_manager() const { return wlrForeignToplevelMgr_ != nullptr; }
   bool has_any_toplevel_list() const { return has_ext_foreign_toplevel_list() || has_wlr_foreign_toplevel_manager(); }
+  bool has_xwayland() const { return hasXWayland_; }
   ExtForeignToplevels& ext_foreign_toplevels() { return extForeignToplevels_; }
   WlrForeignToplevels& wlr_foreign_toplevels() { return wlrForeignToplevels_; }
 
@@ -116,6 +117,7 @@ private:
   ExtForeignToplevels extForeignToplevels_{};
   zwlr_foreign_toplevel_manager_v1* wlrForeignToplevelMgr_ = nullptr;
   WlrForeignToplevels wlrForeignToplevels_{};
+  bool hasXWayland_ = false;
 
 public:
   struct OutputSlot {

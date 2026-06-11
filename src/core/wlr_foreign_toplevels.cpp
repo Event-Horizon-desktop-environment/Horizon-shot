@@ -59,6 +59,7 @@ void WlrForeignToplevels::on_toplevel(void* data, zwlr_foreign_toplevel_manager_
   Toplevel tl;
   tl.handle = handle;
   self.toplevels_.push_back(std::move(tl));
+  HS_LOG("WlrForeignToplevels::on_toplevel: now %zu toplevels tracked", self.toplevels_.size());
 
   static const zwlr_foreign_toplevel_handle_v1_listener kHandleListener = {
       .title = on_title,
@@ -89,20 +90,27 @@ void WlrForeignToplevels::on_title(void* data, zwlr_foreign_toplevel_handle_v1* 
 {
   auto& self = *static_cast<WlrForeignToplevels*>(data);
   for (auto& tl : self.toplevels_) {
-    if (tl.handle == handle) { tl.title = title ? title : ""; return; }
+    if (tl.handle == handle) { tl.title = title ? title : ""; HS_LOG("WlrForeignToplevels::on_title handle=%p title='%s'", (void*)handle, tl.title.c_str()); return; }
   }
+  HS_LOG("WlrForeignToplevels::on_title handle=%p — NOT FOUND in toplevels", (void*)handle);
 }
 
 void WlrForeignToplevels::on_app_id(void* data, zwlr_foreign_toplevel_handle_v1* handle, const char* app_id)
 {
   auto& self = *static_cast<WlrForeignToplevels*>(data);
   for (auto& tl : self.toplevels_) {
-    if (tl.handle == handle) { tl.appId = app_id ? app_id : ""; return; }
+    if (tl.handle == handle) { tl.appId = app_id ? app_id : ""; HS_LOG("WlrForeignToplevels::on_app_id handle=%p app_id='%s'", (void*)handle, tl.appId.c_str()); return; }
   }
+  HS_LOG("WlrForeignToplevels::on_app_id handle=%p — NOT FOUND in toplevels", (void*)handle);
 }
 
-void WlrForeignToplevels::on_parent(void*, zwlr_foreign_toplevel_handle_v1*, zwlr_foreign_toplevel_handle_v1*)
+void WlrForeignToplevels::on_parent(void* data, zwlr_foreign_toplevel_handle_v1* handle, zwlr_foreign_toplevel_handle_v1* parent)
 {
+  HS_LOG("WlrForeignToplevels::on_parent handle=%p parent=%p", (void*)handle, (void*)parent);
+  auto& self = *static_cast<WlrForeignToplevels*>(data);
+  for (auto& tl : self.toplevels_) {
+    if (tl.handle == handle) { tl.parent = parent; return; }
+  }
 }
 
 void WlrForeignToplevels::on_state(void* data, zwlr_foreign_toplevel_handle_v1* handle, struct wl_array* state)
@@ -111,20 +119,41 @@ void WlrForeignToplevels::on_state(void* data, zwlr_foreign_toplevel_handle_v1* 
   bool activated = false;
   uint32_t* s = static_cast<uint32_t*>(state->data);
   size_t count = state->size / sizeof(uint32_t);
+  std::string states;
   for (size_t i = 0; i < count; ++i) {
+    if (!states.empty()) states += "|";
     if (s[i] == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_ACTIVATED) {
       activated = true;
-      break;
+      states += "ACTIVATED";
+    } else if (s[i] == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MAXIMIZED) {
+      states += "MAXIMIZED";
+    } else if (s[i] == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MINIMIZED) {
+      states += "MINIMIZED";
+    } else if (s[i] == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_FULLSCREEN) {
+      states += "FULLSCREEN";
+    } else {
+      states += std::to_string(s[i]);
     }
   }
+  HS_LOG("WlrForeignToplevels::on_state handle=%p activated=%d states=[%s]", (void*)handle, activated, states.c_str());
   for (auto& tl : self.toplevels_) {
     if (tl.handle == handle) { tl.activated = activated; return; }
   }
+  HS_LOG("WlrForeignToplevels::on_state handle=%p — NOT FOUND in toplevels", (void*)handle);
 }
 
-void WlrForeignToplevels::on_done(void* data, zwlr_foreign_toplevel_handle_v1*)
+void WlrForeignToplevels::on_done(void* data, zwlr_foreign_toplevel_handle_v1* handle)
 {
   auto& self = *static_cast<WlrForeignToplevels*>(data);
+  HS_LOG("WlrForeignToplevels::on_done handle=%p", (void*)handle);
+  for (const auto& tl : self.toplevels_) {
+    if (tl.handle == handle) {
+      std::string xw = tl.appId.find("XWayland") != std::string::npos ? " [XWayland]" : "";
+      HS_LOG("WlrForeignToplevels::on_done: window ready%s title='%s' app_id='%s' parent=%p",
+             xw.c_str(), tl.title.c_str(), tl.appId.c_str(), (void*)tl.parent);
+      break;
+    }
+  }
   self.dirty_ = true;
 }
 

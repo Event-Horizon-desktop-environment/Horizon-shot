@@ -18,6 +18,7 @@ public:
     std::string appId{};
     std::string title{};
     bool activated = false;
+    zwlr_foreign_toplevel_handle_v1* parent = nullptr;
   };
 
   WlrForeignToplevels() = default;
