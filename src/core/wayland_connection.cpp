@@ -223,7 +223,7 @@ void WaylandConnection::registry_global(void* data, wl_registry* registry, uint3
     self.xdgBase_ = static_cast<xdg_wm_base*>(wl_registry_bind(registry, name, &xdg_wm_base_interface, 2));
     xdg_wm_base_add_listener(self.xdgBase_, &kXdgWmBaseListener, nullptr);
   } else if (std::strcmp(iface, zwlr_layer_shell_v1_interface.name) == 0) {
-    self.layerShell_ = static_cast<zwlr_layer_shell_v1*>(wl_registry_bind(registry, name, &zwlr_layer_shell_v1_interface, 4));
+     self.layerShell_ = static_cast<zwlr_layer_shell_v1*>(wl_registry_bind(registry, name, &zwlr_layer_shell_v1_interface, std::min(version, 4u)));
   } else if (std::strcmp(iface, zxdg_output_manager_v1_interface.name) == 0) {
     self.xdgOutputMgr_ = static_cast<zxdg_output_manager_v1*>(wl_registry_bind(registry, name, &zxdg_output_manager_v1_interface, 3));
   } else if (std::strcmp(iface, zwlr_screencopy_manager_v1_interface.name) == 0) {
