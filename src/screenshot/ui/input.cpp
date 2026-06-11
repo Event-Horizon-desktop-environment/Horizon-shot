@@ -7,6 +7,8 @@
 
 #include "core/logging.hpp"
 
+#include "wlr-foreign-toplevel-management-unstable-v1-client-protocol.h"
+
 #include <algorithm>
 #include <cstdarg>
 #include <atomic>
@@ -483,6 +485,13 @@ void handle_click(AppState& app, int x, int y)
       app.pressed_item = wi;
       app.selected_window_idx = wi;
       app.pendingRedraw = true;
+      auto* wlr_handle = static_cast<zwlr_foreign_toplevel_handle_v1*>(app.window_list[wi].wlr_handle);
+      if (wlr_handle) {
+        HS_LOG("handle_click: activating wlr toplevel handle=%p seat=%p", (void*)wlr_handle, (void*)app.wl.seat());
+        zwlr_foreign_toplevel_handle_v1_activate(wlr_handle, app.wl.seat());
+        wl_display_flush(app.wl.display());
+        wl_display_roundtrip(app.wl.display());
+      }
       trigger_capture(app);
       return;
     }

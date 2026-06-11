@@ -32,6 +32,7 @@ enum class Source : uint8_t {
 
 struct WindowEntry {
   ext_foreign_toplevel_handle_v1* handle = nullptr;
+  void* wlr_handle = nullptr;
   std::string appId;
   std::string title;
   std::string identifier;

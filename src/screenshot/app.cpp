@@ -115,6 +115,7 @@ static void refresh_window_list(AppState& app)
     for (const auto& tl : toplevels) {
       WindowEntry entry;
       entry.handle = nullptr;
+      entry.wlr_handle = tl.handle;
       entry.appId = tl.appId;
       entry.title = tl.title;
       app.window_list.push_back(std::move(entry));
@@ -449,6 +450,11 @@ int run_screenshot_app(bool select_on_launch)
 int run_screenshot_cli(const AppOptions& opts)
 {
   HS_LOG("run_screenshot_cli: enter mode=%d output=%s copy=%d", (int)opts.mode, opts.output_path.c_str(), opts.copy);
+
+  if (opts.mode == AppOptions::Gui) {
+    return run_screenshot_app(false);
+  }
+
   bool ok = false;
   std::string out_path = opts.output_path;
 
@@ -514,8 +520,8 @@ int run_screenshot_cli(const AppOptions& opts)
     std::cerr << "Window mode requires GUI; use horizon-shot without flags.\n";
     return 1;
 
-  case AppOptions::Gui:
-    return run_screenshot_app(false);
+  default:
+    break;
   }
 
   if (!ok) {

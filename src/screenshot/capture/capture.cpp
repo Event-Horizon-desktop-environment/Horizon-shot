@@ -841,7 +841,7 @@ static void sel_pointer_button(void* data, wl_pointer*, uint32_t, uint32_t,
 {
   auto* s = static_cast<SelState*>(data);
   HS_LOG("sel_pointer_button: button=%u state=%u", button, state);
-  if (button == 273) { if (state) s->cancelled = true; s->done = true; return; }
+  if (button == 273) { s->cancelled = true; s->done = true; return; }
   if (button != 272) return;
   if (state) {
     s->dragging = true;
@@ -850,6 +850,7 @@ static void sel_pointer_button(void* data, wl_pointer*, uint32_t, uint32_t,
     s->drag_ex = s->cur_gx;
     s->drag_ey = s->cur_gy;
   } else {
+    if (!s->dragging) return;
     s->dragging = false;
     int x1 = (std::min)(s->drag_sx, s->drag_ex);
     int y1 = (std::min)(s->drag_sy, s->drag_ey);
