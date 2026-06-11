@@ -6,6 +6,7 @@
 #include "core/file_chooser_dialog.hpp"
 
 #include <algorithm>
+#include <cstdarg>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -93,6 +94,14 @@ static void do_export_png(AppState& app);
 static void do_save_as(AppState& app);
 static void do_copy_png(AppState& app);
 
+static void in_log(const char* fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  FILE* f = fopen("/tmp/eh-shot.log", "a");
+  if (f) { fprintf(f, "[input] "); vfprintf(f, fmt, ap); fprintf(f, "\n"); fclose(f); }
+  va_end(ap);
+}
+
 void trigger_capture(AppState& app)
 {
   char tmp_pattern[] = "/tmp/eh-shot-XXXXXX";
@@ -108,9 +117,11 @@ void trigger_capture(AppState& app)
   bool ok = false;
   switch (app.source) {
   case Source::Focused:
+    in_log("trigger_capture: Focused");
     ok = capture_focused_window(app.wl, out_path);
     break;
   case Source::Window:
+    in_log("trigger_capture: Window (idx=%d)", app.selected_window_idx);
     if (app.selected_window_idx >= 0 &&
         app.selected_window_idx < static_cast<int>(app.window_list.size())) {
       auto* handle = app.window_list[app.selected_window_idx].handle;
@@ -124,20 +135,25 @@ void trigger_capture(AppState& app)
     break;
   case Source::Screen:
     if (app.capture_all_screens) {
-      app.captured_hdr = {}; // reset
+      in_log("trigger_capture: all screens");
+      app.captured_hdr = {};
       ok = capture_all_screens(app.wl, out_path, &app.captured_hdr);
     } else if (app.selected_output_idx >= 0 &&
                app.selected_output_idx < static_cast<int>(app.output_list.size())) {
+      in_log("trigger_capture: output idx=%d", app.selected_output_idx);
       app.captured_hdr = {};
       ok = capture_output(app.wl, app.output_list[app.selected_output_idx].output, out_path, &app.captured_hdr);
     } else {
+      in_log("trigger_capture: single screen (no output selected)");
       ok = capture_screen(app.wl, out_path);
     }
     break;
   case Source::Selection:
     {
+      in_log("trigger_capture: Selection - refreshing outputs");
       app.wl.refresh_logical_outputs();
       auto bounds = app.wl.logical_output_bounds();
+      in_log("trigger_capture: Selection - %zu logical bounds", bounds.size());
       ok = capture_selection_interactive(app.wl, bounds, out_path);
       wl_display_roundtrip(app.wl.display());
     }

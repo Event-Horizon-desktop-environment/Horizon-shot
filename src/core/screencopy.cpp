@@ -1009,7 +1009,7 @@ bool batch_capture_outputs(
     std::vector<BatchedCaptureOutput>& outputs,
     bool overlay_cursor,
     wp_color_manager_v1* color_mgr,
-    zwp_linux_dmabuf_v1* linux_dmabuf)
+    zwp_linux_dmabuf_v1*)
 {
   if (outputs.empty() || !display || !screencopy_mgr || !shm) return false;
 
