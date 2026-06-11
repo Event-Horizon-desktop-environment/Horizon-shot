@@ -11,6 +11,7 @@ libdrm = dependency('libdrm')
 
 libpng = dependency('libpng', required: false)
 libjxl = dependency('libjxl', required: false)
+librsvg = dependency('librsvg-2.0', required: false)
 
 fs = import('fs')
 
@@ -28,6 +29,7 @@ foreach p : [
   'single-pixel-buffer-v1',
   'viewporter',
   'wlr-data-control-unstable-v1',
+  'wlr-foreign-toplevel-management-unstable-v1',
   'wlr-screencopy-unstable-v1',
   'xdg-output-unstable-v1',
   'xdg-shell',
@@ -71,10 +73,12 @@ inc = include_directories('src', 'third_party/stb')
 
 core_sources = files(
   'src/core/memfd.cpp',
+  'src/core/logging.cpp',
   'src/core/shm_buffer.cpp',
   'src/core/wayland_seat.cpp',
   'src/core/clipboard.cpp',
   'src/core/foreign_toplevels.cpp',
+  'src/core/wlr_foreign_toplevels.cpp',
   'src/core/wayland_connection.cpp',
   'src/core/color_info.cpp',
   'src/core/icon_cache.cpp',
@@ -99,6 +103,9 @@ endif
 if libjxl.found()
   cpp_args += '-DEH_HAVE_LIBJXL'
 endif
+if librsvg.found()
+  cpp_args += '-DEH_HAVE_RSVG'
+endif
 
 all_deps = [wayland_client, cairo, xkbcommon, libdrm]
 if libpng.found()
@@ -106,6 +113,9 @@ if libpng.found()
 endif
 if libjxl.found()
   all_deps += libjxl
+endif
+if librsvg.found()
+  all_deps += librsvg
 endif
 
 executable('horizon-shot',

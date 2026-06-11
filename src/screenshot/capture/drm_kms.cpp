@@ -1,6 +1,8 @@
 #include "drm_kms.hpp"
 #include "capture.hpp"
 
+#include "core/logging.hpp"
+
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 #include <drm_fourcc.h>
@@ -11,6 +13,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cerrno>
 #include <cmath>
 #include <algorithm>
 
@@ -96,17 +99,19 @@ static bool read_fb_argb8888(const void* map, uint32_t pitch,
 
 bool capture_output_drm(const char* drm_path, const char* connector_name,
                          HdrData& out_hdr) {
+  HS_LOG("capture_output_drm: enter drm_path=%s connector=%s", drm_path, connector_name);
   int fd = ::open(drm_path, O_RDWR);
-  if (fd < 0) return false;
+  if (fd < 0) { HS_LOG("capture_output_drm: open failed"); return false; }
 
   uint32_t conn_type = 0, conn_type_id = 0;
   if (parse_connector_name(connector_name, conn_type, conn_type_id) < 0) {
+    HS_LOG("capture_output_drm: parse_connector_name failed for '%s'", connector_name);
     ::close(fd);
     return false;
   }
 
   drmModeRes* res = drmModeGetResources(fd);
-  if (!res) { ::close(fd); return false; }
+  if (!res) { HS_LOG("capture_output_drm: drmModeGetResources failed"); ::close(fd); return false; }
 
   uint32_t fb_id = 0;
   int w = 0, h = 0;
@@ -143,13 +148,14 @@ bool capture_output_drm(const char* drm_path, const char* connector_name,
   }
 
   drmModeFreeResources(res);
-  if (!found) { ::close(fd); return false; }
+  if (!found) { HS_LOG("capture_output_drm: no active framebuffer found"); ::close(fd); return false; }
 
   drmModeFB2* fb = drmModeGetFB2(fd, fb_id);
-  if (!fb) { ::close(fd); return false; }
+  if (!fb) { HS_LOG("capture_output_drm: drmModeGetFB2 failed"); ::close(fd); return false; }
 
   int dmabuf_fd = -1;
   if (drmPrimeHandleToFD(fd, fb->handles[0], DRM_CLOEXEC, &dmabuf_fd) < 0) {
+    HS_LOG("capture_output_drm: drmPrimeHandleToFD failed errno=%d", errno);
     drmModeFreeFB2(fb);
     ::close(fd);
     return false;
@@ -160,6 +166,7 @@ bool capture_output_drm(const char* drm_path, const char* connector_name,
   ::close(dmabuf_fd);
 
   if (map == MAP_FAILED) {
+    HS_LOG("capture_output_drm: mmap failed errno=%d", errno);
     drmModeFreeFB2(fb);
     ::close(fd);
     return false;
@@ -179,7 +186,7 @@ bool capture_output_drm(const char* drm_path, const char* connector_name,
   drmModeFreeFB2(fb);
   ::close(fd);
 
-  if (!ok) return false;
+  if (!ok) { HS_LOG("capture_output_drm: read_fb failed"); return false; }
 
   out_hdr.linear_rgb = std::move(rgb);
   out_hdr.width = w;
@@ -187,10 +194,12 @@ bool capture_output_drm(const char* drm_path, const char* connector_name,
   out_hdr.valid = true;
   out_hdr.max_lum = 10000;
 
+  HS_LOG("capture_output_drm: success w=%d h=%d", w, h);
   return true;
 }
 
 std::string find_drm_card_for_output(const char* connector_name) {
+  HS_LOG("find_drm_card_for_output: enter connector=%s", connector_name);
   uint32_t conn_type = 0, conn_type_id = 0;
   if (parse_connector_name(connector_name, conn_type, conn_type_id) < 0)
     return {};
@@ -223,9 +232,10 @@ std::string find_drm_card_for_output(const char* connector_name) {
     drmModeFreeResources(res);
     ::close(fd);
 
-    if (found) return std::string(path);
+    if (found) { HS_LOG("find_drm_card_for_output: found %s", path); return std::string(path); }
   }
 
+  HS_LOG("find_drm_card_for_output: not found");
   return {};
 }
 

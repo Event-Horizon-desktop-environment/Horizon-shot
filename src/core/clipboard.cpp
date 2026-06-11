@@ -1,4 +1,5 @@
 #include "clipboard.hpp"
+#include "core/logging.hpp"
 
 #include <unistd.h>
 #include <cerrno>
@@ -65,7 +66,8 @@ static constexpr zwlr_data_control_source_v1_listener kWlrSourceListener_ = {
 ClipboardService::~ClipboardService() { cleanup(); }
 
 bool ClipboardService::bind_ext(void* ext_data_control_mgr, wl_seat* seat, wl_display* display) {
-  if (!ext_data_control_mgr || !seat || !display) return false;
+  HS_LOG("ClipboardService::bind_ext mgr=%p seat=%p", ext_data_control_mgr, (void*)seat);
+  if (!ext_data_control_mgr || !seat || !display) { HS_LOG("ClipboardService::bind_ext: invalid args"); return false; }
   cleanup();
   manager_ = ext_data_control_mgr;
   seat_ = seat;
@@ -79,7 +81,8 @@ bool ClipboardService::bind_ext(void* ext_data_control_mgr, wl_seat* seat, wl_di
 }
 
 bool ClipboardService::bind_wlr(void* wlr_data_control_mgr, wl_seat* seat, wl_display* display) {
-  if (!wlr_data_control_mgr || !seat || !display) return false;
+  HS_LOG("ClipboardService::bind_wlr mgr=%p seat=%p", wlr_data_control_mgr, (void*)seat);
+  if (!wlr_data_control_mgr || !seat || !display) { HS_LOG("ClipboardService::bind_wlr: invalid args"); return false; }
   cleanup();
   manager_ = wlr_data_control_mgr;
   seat_ = seat;
@@ -93,6 +96,7 @@ bool ClipboardService::bind_wlr(void* wlr_data_control_mgr, wl_seat* seat, wl_di
 }
 
 void ClipboardService::cleanup() {
+  HS_LOG("ClipboardService::cleanup");
   if (source_) {
     if (is_ext_) {
       ext_data_control_source_v1_destroy(static_cast<ext_data_control_source_v1*>(source_));
@@ -120,7 +124,8 @@ bool ClipboardService::is_available() const noexcept {
 }
 
 bool ClipboardService::copy_data(std::string mime_type, std::string data) {
-  if (!available_ || !device_) return false;
+  HS_LOG("ClipboardService::copy_data mime_type='%s' data.size=%zu", mime_type.c_str(), data.size());
+  if (!available_ || !device_) { HS_LOG("ClipboardService::copy_data: not available"); return false; }
 
   if (source_) {
     if (is_ext_) {

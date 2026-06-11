@@ -1,4 +1,5 @@
 #include "screenshot/app.hpp"
+#include "core/logging.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -35,11 +36,16 @@ static void print_help(const char* prog)
 
 int main(int argc, char* argv[])
 {
+  hs::core::init_logging();
+  HS_LOG("main: argc=%d argv[0]=%s", argc, argc > 0 ? argv[0] : "?");
+
   hs::screenshot::AppOptions opts;
 
   for (int i = 1; i < argc; ++i) {
+    HS_LOG("main: arg[%d]=%s", i, argv[i]);
     if (std::strcmp(argv[i], "-h") == 0 || std::strcmp(argv[i], "--help") == 0) {
       print_help(argv[0]);
+      HS_LOG("main: exiting after --help");
       return 0;
     }
     if (std::strcmp(argv[i], "--list-outputs") == 0) {
@@ -59,6 +65,7 @@ int main(int argc, char* argv[])
           o.is_hdr ? " HDR" : "");
       }
       wl.disconnect();
+      HS_LOG("main: exiting after --list-outputs");
       return 0;
     }
     if (std::strcmp(argv[i], "-s") == 0 || std::strcmp(argv[i], "--select") == 0) {
@@ -70,10 +77,10 @@ int main(int argc, char* argv[])
     } else if (std::strcmp(argv[i], "-o") == 0 || std::strcmp(argv[i], "--output") == 0) {
       opts.mode = hs::screenshot::AppOptions::Screen;
       if (i + 1 < argc) opts.output_name = argv[++i];
-      else { std::cerr << "--output requires a name argument\n"; return 1; }
+      else { std::cerr << "--output requires a name argument\n"; HS_LOG("main: --output missing name"); return 1; }
     } else if (std::strcmp(argv[i], "-O") == 0 || std::strcmp(argv[i], "--output-file") == 0) {
       if (i + 1 < argc) opts.output_path = argv[++i];
-      else { std::cerr << "--output-file requires a path argument\n"; return 1; }
+      else { std::cerr << "--output-file requires a path argument\n"; HS_LOG("main: --output-file missing path"); return 1; }
     } else if (std::strcmp(argv[i], "-c") == 0 || std::strcmp(argv[i], "--copy") == 0) {
       opts.copy = true;
     } else if (std::strcmp(argv[i], "--cursor") == 0) {
@@ -86,16 +93,20 @@ int main(int argc, char* argv[])
       opts.frame.hideChrome = true;
     } else if (std::strcmp(argv[i], "--inset") == 0) {
       if (i + 1 < argc) opts.frame.inset = std::atoi(argv[++i]);
-      else { std::cerr << "--inset requires a value\n"; return 1; }
+      else { std::cerr << "--inset requires a value\n"; HS_LOG("main: --inset missing value"); return 1; }
     } else if (std::strcmp(argv[i], "--corner-radius") == 0) {
       if (i + 1 < argc) opts.frame.cornerRadius = std::atoi(argv[++i]);
-      else { std::cerr << "--corner-radius requires a value\n"; return 1; }
+      else { std::cerr << "--corner-radius requires a value\n"; HS_LOG("main: --corner-radius missing value"); return 1; }
     } else {
       std::cerr << "Unknown option: " << argv[i] << "\n";
+      HS_LOG("main: unknown option '%s'", argv[i]);
       print_help(argv[0]);
       return 1;
     }
   }
 
-  return hs::screenshot::run_screenshot_cli(opts);
+  HS_LOG("main: calling run_screenshot_cli with mode=%d", (int)opts.mode);
+  int ret = hs::screenshot::run_screenshot_cli(opts);
+  HS_LOG("main: run_screenshot_cli returned %d", ret);
+  return ret;
 }

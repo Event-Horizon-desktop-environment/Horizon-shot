@@ -1,11 +1,14 @@
 #include "screenshot/ui/layout.hpp"
 
+#include "core/logging.hpp"
+
 #include <algorithm>
 
 namespace hs::screenshot {
 
 Layout compute_layout(int window_w, int window_h)
 {
+  HS_LOG("compute_layout: enter w=%d h=%d", window_w, window_h);
   Layout l;
 
   int sidebar_fixed = 320;

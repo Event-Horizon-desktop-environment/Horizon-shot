@@ -4,6 +4,7 @@
 #include "core/wayland_seat.hpp"
 #include "core/clipboard.hpp"
 #include "core/foreign_toplevels.hpp"
+#include "core/wlr_foreign_toplevels.hpp"
 
 #include <string>
 #include <string_view>
@@ -26,6 +27,7 @@ struct ext_foreign_toplevel_image_capture_source_manager_v1;
 struct wp_color_manager_v1;
 struct ext_data_control_manager_v1;
 struct zwlr_data_control_manager_v1;
+struct zwlr_foreign_toplevel_manager_v1;
 struct zwp_linux_dmabuf_v1;
 struct ext_foreign_toplevel_list_v1;
 struct zxdg_output_v1;
@@ -75,7 +77,10 @@ public:
   zwp_linux_dmabuf_v1* linux_dmabuf() const { return linuxDmabuf_; }
   ext_foreign_toplevel_list_v1* ext_foreign_toplevel_list() const { return extForeignToplevelList_; }
   bool has_ext_foreign_toplevel_list() const { return extForeignToplevelList_ != nullptr; }
+  bool has_wlr_foreign_toplevel_manager() const { return wlrForeignToplevelMgr_ != nullptr; }
+  bool has_any_toplevel_list() const { return has_ext_foreign_toplevel_list() || has_wlr_foreign_toplevel_manager(); }
   ExtForeignToplevels& ext_foreign_toplevels() { return extForeignToplevels_; }
+  WlrForeignToplevels& wlr_foreign_toplevels() { return wlrForeignToplevels_; }
 
   void refresh_logical_outputs();
   std::vector<LogicalOutputBounds> logical_output_bounds() const;
@@ -109,6 +114,8 @@ private:
   zwp_linux_dmabuf_v1* linuxDmabuf_ = nullptr;
   ext_foreign_toplevel_list_v1* extForeignToplevelList_ = nullptr;
   ExtForeignToplevels extForeignToplevels_{};
+  zwlr_foreign_toplevel_manager_v1* wlrForeignToplevelMgr_ = nullptr;
+  WlrForeignToplevels wlrForeignToplevels_{};
 
 public:
   struct OutputSlot {

@@ -1,4 +1,5 @@
 #include "core/wayland_connection.hpp"
+#include "core/logging.hpp"
 
 #include <wayland-client.h>
 #include <algorithm>
@@ -17,22 +18,10 @@
 #include "wlr-data-control-unstable-v1-client-protocol.h"
 #include "linux-dmabuf-v1-client-protocol.h"
 #include "ext-foreign-toplevel-list-v1-client-protocol.h"
+#include "wlr-foreign-toplevel-management-unstable-v1-client-protocol.h"
 #include "xdg-output-unstable-v1-client-protocol.h"
 
 namespace hs::core {
-
-static void wl_log(const char* fmt, ...) {
-  va_list ap;
-  va_start(ap, fmt);
-  FILE* f = fopen("/tmp/eh-shot.log", "a");
-  if (f) {
-    fprintf(f, "[wl] ");
-    vfprintf(f, fmt, ap);
-    fprintf(f, "\n");
-    fclose(f);
-  }
-  va_end(ap);
-}
 
 static void xdg_wm_base_ping(void*, xdg_wm_base* wm, uint32_t serial)
 {
@@ -48,12 +37,12 @@ WaylandConnection::~WaylandConnection() { disconnect(); }
 bool WaylandConnection::connect()
 {
   display_ = wl_display_connect(nullptr);
-  if (!display_) { wl_log("connect: wl_display_connect failed"); return false; }
-  wl_log("connect: connected to display");
+  if (!display_) { HS_LOG("connect: wl_display_connect failed"); return false; }
+  HS_LOG("connect: connected to display");
 
   registry_ = wl_display_get_registry(display_);
   if (!registry_) {
-    wl_log("connect: wl_display_get_registry failed");
+    HS_LOG("connect: wl_display_get_registry failed");
     wl_display_disconnect(display_);
     display_ = nullptr;
     return false;
@@ -63,31 +52,33 @@ bool WaylandConnection::connect()
   wl_display_roundtrip(display_);
   wl_display_roundtrip(display_);
 
-  wl_log("connect: compositor=%p shm=%p seat=%p layer_shell=%p screencopy_mgr=%p ext_cc_mgr=%p",
+  HS_LOG("connect: compositor=%p shm=%p seat=%p layer_shell=%p screencopy_mgr=%p ext_cc_mgr=%p",
          (void*)compositor_, (void*)shm_, (void*)seat_, (void*)layerShell_,
          (void*)screencopyMgr_, (void*)extImageCopyCaptureMgr_);
-  wl_log("connect: xdg_output_mgr=%p ext_output_src=%p ext_toplevel_src=%p color_mgr=%p",
+  HS_LOG("connect: xdg_output_mgr=%p ext_output_src=%p ext_toplevel_src=%p color_mgr=%p",
          (void*)xdgOutputMgr_, (void*)extOutputImageCaptureSourceMgr_,
          (void*)extForeignToplevelImageCaptureSourceMgr_, (void*)colorMgr_);
-  wl_log("connect: ext_data_ctrl=%p wlr_data_ctrl=%p linux_dmabuf=%p ext_toplevel_list=%p",
+  HS_LOG("connect: ext_data_ctrl=%p wlr_data_ctrl=%p linux_dmabuf=%p ext_toplevel_list=%p wlr_toplevel_mgr=%p",
          (void*)extDataControlMgr_, (void*)wlrDataControlMgr_,
-         (void*)linuxDmabuf_, (void*)extForeignToplevelList_);
-  wl_log("connect: %zu tracked outputs", tracked_outputs_.size());
+         (void*)linuxDmabuf_, (void*)extForeignToplevelList_, (void*)wlrForeignToplevelMgr_);
+  HS_LOG("connect: %zu tracked outputs", tracked_outputs_.size());
 
   return true;
 }
 
 void WaylandConnection::disconnect()
 {
+  HS_LOG("disconnect");
   extForeignToplevels_.shutdown();
+  extForeignToplevelList_ = nullptr;
+  wlrForeignToplevels_.shutdown();
+  wlrForeignToplevelMgr_ = nullptr;
 
   for (auto& slot : tracked_outputs_) {
     if (slot->xdg) zxdg_output_v1_destroy(slot->xdg);
     slot->xdg = nullptr;
   }
   tracked_outputs_.clear();
-
-  if (extForeignToplevelList_) ext_foreign_toplevel_list_v1_destroy(extForeignToplevelList_);
   if (linuxDmabuf_) zwp_linux_dmabuf_v1_destroy(linuxDmabuf_);
   if (wlrDataControlMgr_) zwlr_data_control_manager_v1_destroy(wlrDataControlMgr_);
   if (extDataControlMgr_) ext_data_control_manager_v1_destroy(extDataControlMgr_);
@@ -122,6 +113,7 @@ void WaylandConnection::disconnect()
   wlrDataControlMgr_ = nullptr;
   linuxDmabuf_ = nullptr;
   extForeignToplevelList_ = nullptr;
+  wlrForeignToplevelMgr_ = nullptr;
 }
 
 static void xdg_output_name(void* data, struct zxdg_output_v1*, const char* name)
@@ -160,6 +152,7 @@ static constexpr zxdg_output_v1_listener kXdgOutputListener = {
 
 void WaylandConnection::bind_xdg_for_tracked_()
 {
+  HS_LOG("bind_xdg_for_tracked_: xdgOutputMgr=%p tracked=%zu", (void*)xdgOutputMgr_, tracked_outputs_.size());
   if (!xdgOutputMgr_) return;
   for (auto& slot : tracked_outputs_) {
     if (slot->output && !slot->xdg) {
@@ -173,7 +166,7 @@ void WaylandConnection::bind_xdg_for_tracked_()
 
 void WaylandConnection::refresh_logical_outputs()
 {
-  wl_log("refresh_logical_outputs: %zu tracked outputs, xdgMgr=%p",
+  HS_LOG("refresh_logical_outputs: %zu tracked outputs, xdgMgr=%p",
          tracked_outputs_.size(), (void*)xdgOutputMgr_);
   bind_xdg_for_tracked_();
   if (display_) {
@@ -181,7 +174,7 @@ void WaylandConnection::refresh_logical_outputs()
     wl_display_roundtrip(display_);
   }
   for (const auto& slot : tracked_outputs_) {
-    wl_log("  output slot: name='%s' logical=(%d,%d %dx%d) ready=%d",
+    HS_LOG("  output slot: name='%s' logical=(%d,%d %dx%d) ready=%d",
            slot->name.c_str(), slot->logical_x, slot->logical_y,
            slot->logical_w, slot->logical_h, slot->ready);
   }
@@ -192,7 +185,7 @@ std::vector<LogicalOutputBounds> WaylandConnection::logical_output_bounds() cons
   std::vector<LogicalOutputBounds> result;
   for (const auto& slot : tracked_outputs_) {
     if (!slot->ready || !slot->output) {
-      wl_log("logical_output_bounds: skipping slot (ready=%d output=%p)", slot->ready, (void*)slot->output);
+      HS_LOG("logical_output_bounds: skipping slot (ready=%d output=%p)", slot->ready, (void*)slot->output);
       continue;
     }
     LogicalOutputBounds b;
@@ -202,15 +195,16 @@ std::vector<LogicalOutputBounds> WaylandConnection::logical_output_bounds() cons
     b.global_y = slot->logical_y;
     b.width = slot->logical_w;
     b.height = slot->logical_h;
-    wl_log("logical_output_bounds: name='%s' @(%d,%d) %dx%d", slot->name.c_str(), b.global_x, b.global_y, b.width, b.height);
+    HS_LOG("logical_output_bounds: name='%s' @(%d,%d) %dx%d", slot->name.c_str(), b.global_x, b.global_y, b.width, b.height);
     result.push_back(std::move(b));
   }
-  wl_log("logical_output_bounds: %zu results returned", result.size());
+  HS_LOG("logical_output_bounds: %zu results returned", result.size());
   return result;
 }
 
 PickedLogicalOutput WaylandConnection::pick_largest_logical_output() const
 {
+  HS_LOG("pick_largest_logical_output: %zu tracked outputs", tracked_outputs_.size());
   PickedLogicalOutput best{};
   int bestArea = 0;
   for (const auto& slot : tracked_outputs_) {
@@ -253,7 +247,7 @@ static constexpr wl_output_listener kOutputListener = {
 void WaylandConnection::registry_global(void* data, wl_registry* registry, uint32_t name, const char* iface, uint32_t version)
 {
   auto& self = *static_cast<WaylandConnection*>(data);
-  wl_log("registry_global: name=%u iface=%s version=%u", name, iface, version);
+  HS_LOG("registry_global: name=%u iface=%s version=%u", name, iface, version);
 
   if (std::strcmp(iface, wl_compositor_interface.name) == 0) {
     self.compositor_ = static_cast<wl_compositor*>(wl_registry_bind(registry, name, &wl_compositor_interface, std::min(version, 4u)));
@@ -284,6 +278,11 @@ void WaylandConnection::registry_global(void* data, wl_registry* registry, uint3
     self.wlrDataControlMgr_ = static_cast<zwlr_data_control_manager_v1*>(wl_registry_bind(registry, name, &zwlr_data_control_manager_v1_interface, std::min(version, 2u)));
   } else if (std::strcmp(iface, zwp_linux_dmabuf_v1_interface.name) == 0) {
     self.linuxDmabuf_ = static_cast<zwp_linux_dmabuf_v1*>(wl_registry_bind(registry, name, &zwp_linux_dmabuf_v1_interface, std::min(version, 6u)));
+  } else if (std::strcmp(iface, zwlr_foreign_toplevel_manager_v1_interface.name) == 0) {
+    self.wlrForeignToplevelMgr_ = static_cast<zwlr_foreign_toplevel_manager_v1*>(wl_registry_bind(registry, name, &zwlr_foreign_toplevel_manager_v1_interface, std::min(version, 3u)));
+    if (self.wlrForeignToplevelMgr_) {
+      self.wlrForeignToplevels_.bind(self.wlrForeignToplevelMgr_, self.display_);
+    }
   } else if (std::strcmp(iface, ext_foreign_toplevel_list_v1_interface.name) == 0) {
     self.extForeignToplevelList_ = static_cast<ext_foreign_toplevel_list_v1*>(wl_registry_bind(registry, name, &ext_foreign_toplevel_list_v1_interface, std::min(version, 1u)));
     if (self.extForeignToplevelList_) {
@@ -299,9 +298,9 @@ void WaylandConnection::registry_global(void* data, wl_registry* registry, uint3
 
 void WaylandConnection::registry_global_remove(void* data, wl_registry* registry, uint32_t name)
 {
+  HS_LOG("registry_global_remove: name=%u", name);
   (void)data;
   (void)registry;
-  (void)name;
 }
 
 }

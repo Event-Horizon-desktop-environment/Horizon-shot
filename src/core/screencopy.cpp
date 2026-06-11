@@ -1,4 +1,5 @@
 #include "core/screencopy.hpp"
+#include "core/logging.hpp"
 
 #include "color-management-v1-client-protocol.h"
 #include "ext-image-capture-source-v1-client-protocol.h"
@@ -15,6 +16,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
+#include <cerrno>
 #include <iostream>
 #include <cstring>
 #include <cmath>
@@ -665,7 +667,7 @@ bool write_hdr_from_linear(const float* rgb, int w, int h,
 
 static void frame_buffer(void* data, zwlr_screencopy_frame_v1*, uint32_t format, uint32_t w, uint32_t h,
                          uint32_t stride) {
-   
+  HS_LOG("frame_buffer fmt=0x%x %ux%u stride=%u", format, w, h, stride);
   auto* c = static_cast<CaptureCtx*>(data);
   c->fmt = format;
   c->width = w;
@@ -675,14 +677,14 @@ static void frame_buffer(void* data, zwlr_screencopy_frame_v1*, uint32_t format,
 }
 
 static void frame_flags(void* data, zwlr_screencopy_frame_v1*, uint32_t flags) {
-   
+  HS_LOG("frame_flags flags=0x%x y_invert=%d", flags, (flags & ZWLR_SCREENCOPY_FRAME_V1_FLAGS_Y_INVERT) != 0);
   auto* c = static_cast<CaptureCtx*>(data);
   c->y_invert = (flags & ZWLR_SCREENCOPY_FRAME_V1_FLAGS_Y_INVERT) != 0;
 }
 
 static void frame_ready(void* data, zwlr_screencopy_frame_v1* fr, uint32_t  , uint32_t  ,
                          uint32_t  ) {
-   
+   HS_LOG("frame_ready raw_mode=%d path='%s'", static_cast<CaptureCtx*>(data)->raw_mode, static_cast<CaptureCtx*>(data)->path_utf8.c_str());
    auto* c = static_cast<CaptureCtx*>(data);
    (void)fr;
    c->phase2_done = true;
@@ -735,7 +737,7 @@ static void frame_ready(void* data, zwlr_screencopy_frame_v1* fr, uint32_t  , ui
  }
 
 static void frame_failed(void* data, zwlr_screencopy_frame_v1*) {
-   
+  HS_LOG("frame_failed");
   auto* c = static_cast<CaptureCtx*>(data);
   c->phase2_done = true;
   c->phase2_success = false;
@@ -745,6 +747,7 @@ static void frame_damage(void*, zwlr_screencopy_frame_v1*, uint32_t, uint32_t, u
 
 static void frame_linux_dmabuf(void* data, zwlr_screencopy_frame_v1*, uint32_t format, uint32_t w,
                                 uint32_t h) {
+  HS_LOG("frame_linux_dmabuf fmt=0x%x %ux%u", format, w, h);
   auto* c = static_cast<CaptureCtx*>(data);
   c->dmabuf_offered = true;
   c->dmabuf_fmt = format;
@@ -756,6 +759,7 @@ static void frame_linux_dmabuf(void* data, zwlr_screencopy_frame_v1*, uint32_t f
 }
 
 static void frame_buffer_done(void* data, zwlr_screencopy_frame_v1*) {
+  HS_LOG("frame_buffer_done");
   static_cast<CaptureCtx*>(data)->buffer_done = true;
 }
 
@@ -853,7 +857,7 @@ static bool mmap_dmabuf_buffer(CaptureCtx& ctx) {
 #endif
 
 static bool dispatch_until(CaptureCtx& c, bool (*pred)(const CaptureCtx&)) {
-   
+  HS_LOG("dispatch_until");
   constexpr int kMax = 65536;
   for (int i = 0; i < kMax; ++i) {
     if (pred(c)) return true;
@@ -872,9 +876,10 @@ static bool phase2_done(const CaptureCtx& c) { return c.phase2_done; }
 static bool screencopy_to_png_impl(wl_display* display, zwlr_screencopy_manager_v1* screencopy_mgr, wl_shm* shm,
                                     wl_output* output, bool overlay_cursor, std::string_view png_path, bool use_region,
                                     int32_t region_x, int32_t region_y, int32_t region_w, int32_t region_h) {
-   
-  if (!display || !screencopy_mgr || !shm || !output || png_path.empty()) return false;
-  if (use_region && (region_w <= 0 || region_h <= 0)) return false;
+  HS_LOG("screencopy_to_png_impl path='%.*s' use_region=%d region=%d,%d %dx%d",
+         (int)png_path.size(), png_path.data(), use_region, region_x, region_y, region_w, region_h);
+  if (!display || !screencopy_mgr || !shm || !output || png_path.empty()) { HS_LOG("screencopy_to_png_impl: invalid args"); return false; }
+  if (use_region && (region_w <= 0 || region_h <= 0)) { HS_LOG("screencopy_to_png_impl: invalid region"); return false; }
 
   CaptureCtx ctx{};
   ctx.display = display;
@@ -887,16 +892,19 @@ static bool screencopy_to_png_impl(wl_display* display, zwlr_screencopy_manager_
   } else {
     fr = zwlr_screencopy_manager_v1_capture_output(screencopy_mgr, overlay_cursor ? 1 : 0, output);
   }
-  if (!fr) return false;
+  if (!fr) { HS_LOG("screencopy_to_png_impl: capture_output[_region] returned null"); return false; }
   ctx.frame = fr;
   zwlr_screencopy_frame_v1_add_listener(fr, &kFrameListener, &ctx);
 
   if (!dispatch_until(ctx, have_buffer_or_fail)) {
+    HS_LOG("screencopy_to_png_impl: phase1 dispatch failed (failed=%d have_buf=%d w=%d h=%d stride=%d)",
+             ctx.failed, ctx.have_buffer, ctx.width, ctx.height, ctx.stride);
     zwlr_screencopy_frame_v1_destroy(fr);
     return false;
   }
   if (ctx.failed || !ctx.have_buffer || ctx.width == 0 || ctx.height == 0 || ctx.stride < ctx.width * 4u) {
-
+    HS_LOG("screencopy_to_png_impl: phase1 bad (failed=%d have_buf=%d w=%d h=%d stride=%d)",
+             ctx.failed, ctx.have_buffer, ctx.width, ctx.height, ctx.stride);
     zwlr_screencopy_frame_v1_destroy(fr);
     return false;
   }
@@ -909,16 +917,19 @@ static bool screencopy_to_png_impl(wl_display* display, zwlr_screencopy_manager_
     if (ctx.fd >= 0) unlink(tmpl);
   }
   if (ctx.fd < 0) {
+    HS_LOG("screencopy_to_png_impl: memfd/mkstemp failed");
     zwlr_screencopy_frame_v1_destroy(fr);
     return false;
   }
   if (ftruncate(ctx.fd, static_cast<off_t>(ctx.map_size)) != 0) {
+    HS_LOG("screencopy_to_png_impl: ftruncate failed errno=%d", errno);
     close(ctx.fd);
     zwlr_screencopy_frame_v1_destroy(fr);
     return false;
   }
   ctx.map = mmap(nullptr, ctx.map_size, PROT_READ | PROT_WRITE, MAP_SHARED, ctx.fd, 0);
   if (ctx.map == MAP_FAILED) {
+    HS_LOG("screencopy_to_png_impl: mmap failed errno=%d", errno);
     ctx.map = nullptr;
     close(ctx.fd);
     zwlr_screencopy_frame_v1_destroy(fr);
@@ -927,6 +938,7 @@ static bool screencopy_to_png_impl(wl_display* display, zwlr_screencopy_manager_
 
   wl_shm_pool* pool = wl_shm_create_pool(shm, ctx.fd, static_cast<int>(ctx.map_size));
   if (!pool) {
+    HS_LOG("screencopy_to_png_impl: wl_shm_create_pool failed");
     munmap(ctx.map, ctx.map_size);
     close(ctx.fd);
     zwlr_screencopy_frame_v1_destroy(fr);
@@ -936,6 +948,7 @@ static bool screencopy_to_png_impl(wl_display* display, zwlr_screencopy_manager_
                                              static_cast<int>(ctx.stride), static_cast<int>(ctx.fmt));
   wl_shm_pool_destroy(pool);
   if (!buf) {
+    HS_LOG("screencopy_to_png_impl: wl_shm_pool_create_buffer failed");
     munmap(ctx.map, ctx.map_size);
     close(ctx.fd);
     zwlr_screencopy_frame_v1_destroy(fr);
@@ -950,6 +963,7 @@ static bool screencopy_to_png_impl(wl_display* display, zwlr_screencopy_manager_
   ctx.phase2_done = false;
   ctx.phase2_success = false;
   if (!dispatch_until(ctx, phase2_done)) {
+    HS_LOG("screencopy_to_png_impl: phase2 dispatch failed");
     wl_buffer_destroy(buf);
     munmap(ctx.map, ctx.map_size);
     close(ctx.fd);
@@ -970,6 +984,7 @@ static bool screencopy_to_png_impl(wl_display* display, zwlr_screencopy_manager_
     close(ctx.fd);
     ctx.fd = -1;
   }
+  HS_LOG("screencopy_to_png_impl: returning %d", ok);
   return ok;
 }
 
@@ -977,29 +992,17 @@ static bool screencopy_to_png_impl(wl_display* display, zwlr_screencopy_manager_
 
 bool screencopy_output_to_png(wl_display* display, zwlr_screencopy_manager_v1* screencopy_mgr, wl_shm* shm,
                               wl_output* output, bool overlay_cursor, std::string_view png_path) {
-   
+  HS_LOG("screencopy_output_to_png path='%.*s'", (int)png_path.size(), png_path.data());
   return screencopy_to_png_impl(display, screencopy_mgr, shm, output, overlay_cursor, png_path, false, 0, 0, 0, 0);
 }
 
 bool screencopy_output_region_to_png(wl_display* display, zwlr_screencopy_manager_v1* screencopy_mgr, wl_shm* shm,
                                      wl_output* output, int32_t region_x, int32_t region_y, int32_t region_w,
                                      int32_t region_h, bool overlay_cursor, std::string_view png_path) {
-   
+  HS_LOG("screencopy_output_region_to_png region=%d,%d %dx%d path='%.*s'", region_x, region_y, region_w, region_h,
+         (int)png_path.size(), png_path.data());
   return screencopy_to_png_impl(display, screencopy_mgr, shm, output, overlay_cursor, png_path, true, region_x,
                                 region_y, region_w, region_h);
-}
-
-static void scopy_log(const char* fmt, ...) {
-  va_list ap;
-  va_start(ap, fmt);
-  FILE* f = fopen("/tmp/eh-shot.log", "a");
-  if (f) {
-    fprintf(f, "[scopy] ");
-    vfprintf(f, fmt, ap);
-    fprintf(f, "\n");
-    fclose(f);
-  }
-  va_end(ap);
 }
 
 bool batch_capture_outputs(
@@ -1011,7 +1014,8 @@ bool batch_capture_outputs(
     wp_color_manager_v1* color_mgr,
     zwp_linux_dmabuf_v1*)
 {
-  if (outputs.empty() || !display || !screencopy_mgr || !shm) return false;
+  HS_LOG("batch_capture_outputs outputs=%zu", outputs.size());
+  if (outputs.empty() || !display || !screencopy_mgr || !shm) { HS_LOG("batch_capture_outputs: invalid args"); return false; }
 
   std::vector<CaptureCtx> ctxs(outputs.size());
 
@@ -1020,11 +1024,11 @@ bool batch_capture_outputs(
     ctx.display = display;
     ctx.raw_mode = true;
 
-    if (!outputs[i].output) { ctx.failed = true; continue; }
+    if (!outputs[i].output) { HS_LOG("batch_capture_outputs[%zu]: null output", i); ctx.failed = true; continue; }
 
     auto* fr = zwlr_screencopy_manager_v1_capture_output(
         screencopy_mgr, overlay_cursor ? 1 : 0, outputs[i].output);
-    if (!fr) { ctx.failed = true; continue; }
+    if (!fr) { HS_LOG("batch_capture_outputs[%zu]: capture_output returned null", i); ctx.failed = true; continue; }
     ctx.frame = fr;
     zwlr_screencopy_frame_v1_add_listener(fr, &kFrameListener, &ctx);
   }
@@ -1041,12 +1045,12 @@ bool batch_capture_outputs(
 
       bool any_alive = false;
       for (auto& c : ctxs) { if (c.frame && !c.failed) { any_alive = true; break; } }
-      if (!any_alive) break;
+      if (!any_alive) { HS_LOG("batch_capture_outputs phase1: no alive frames"); break; }
 
-      if (wl_display_dispatch(display) < 0) goto batch_cleanup;
+      if (wl_display_dispatch(display) < 0) { HS_LOG("batch_capture_outputs phase1: dispatch error"); goto batch_cleanup; }
       for (size_t i = 0; i < ctxs.size(); ++i) {
         if (ctxs[i].dmabuf_offered && !ctxs[i].failed) {
-          scopy_log("batch phase2: i=%zu DMABUF offered fmt=0x%x", i, ctxs[i].fmt);
+          HS_LOG("batch phase2: i=%zu DMABUF offered fmt=0x%x", i, ctxs[i].fmt);
         }
       }
     }
@@ -1055,18 +1059,21 @@ bool batch_capture_outputs(
   for (size_t i = 0; i < outputs.size(); ++i) {
     auto& ctx = ctxs[i];
     if (ctx.failed || ctx.width == 0 || ctx.height == 0) {
+      if (!ctx.failed) HS_LOG("batch_capture_outputs[%zu]: bad dims w=%d h=%d", i, ctx.width, ctx.height);
       ctx.failed = true;
       continue;
     }
 
     if (ctx.dmabuf_offered && color_mgr) {
-      scopy_log("batch phase3: i=%zu using DMA-BUF (HDR path) fmt=0x%x", i, ctx.fmt);
+      HS_LOG("batch phase3: i=%zu using DMA-BUF (HDR path) fmt=0x%x", i, ctx.fmt);
       ctx.stride = static_cast<uint32_t>(ctx.width) * (bpp_from_fourcc(ctx.fmt) / 8);
 #ifdef EH_HAVE_LIBDRM
       if (!create_dmabuf_buffer(ctx, linux_dmabuf)) {
+        HS_LOG("batch_capture_outputs[%zu]: create_dmabuf_buffer failed", i);
         ctx.failed = true;
       }
 #else
+      HS_LOG("batch_capture_outputs[%zu]: DMABUF offered but no libdrm", i);
       ctx.failed = true;
 #endif
     } else if (ctx.have_buffer) {
@@ -1077,34 +1084,38 @@ bool batch_capture_outputs(
         ctx.fd = mkstemp(tmpl);
         if (ctx.fd >= 0) unlink(tmpl);
       }
-      if (ctx.fd < 0) { ctx.failed = true; continue; }
+      if (ctx.fd < 0) { HS_LOG("batch_capture_outputs[%zu]: memfd/mkstemp failed", i); ctx.failed = true; continue; }
       if (ftruncate(ctx.fd, static_cast<off_t>(ctx.map_size)) != 0) {
+        HS_LOG("batch_capture_outputs[%zu]: ftruncate failed errno=%d", i, errno);
         close(ctx.fd); ctx.fd = -1; ctx.failed = true; continue;
       }
 
       ctx.map = mmap(nullptr, ctx.map_size, PROT_READ | PROT_WRITE, MAP_SHARED, ctx.fd, 0);
-      if (ctx.map == MAP_FAILED) { ctx.map = nullptr; close(ctx.fd); ctx.fd = -1; ctx.failed = true; continue; }
+      if (ctx.map == MAP_FAILED) { HS_LOG("batch_capture_outputs[%zu]: mmap failed errno=%d", i, errno); ctx.map = nullptr; close(ctx.fd); ctx.fd = -1; ctx.failed = true; continue; }
 
       wl_shm_pool* pool = wl_shm_create_pool(shm, ctx.fd, static_cast<int>(ctx.map_size));
-      if (!pool) { ctx.failed = true; continue; }
+      if (!pool) { HS_LOG("batch_capture_outputs[%zu]: wl_shm_create_pool failed", i); ctx.failed = true; continue; }
 
       ctx.wl_buf = wl_shm_pool_create_buffer(
           pool, 0, static_cast<int>(ctx.width), static_cast<int>(ctx.height),
           static_cast<int>(ctx.stride), static_cast<int>(ctx.fmt));
       wl_shm_pool_destroy(pool);
-      if (!ctx.wl_buf) { ctx.failed = true; continue; }
+      if (!ctx.wl_buf) { HS_LOG("batch_capture_outputs[%zu]: wl_shm_pool_create_buffer failed", i); ctx.failed = true; continue; }
 
       wl_buffer_add_listener(ctx.wl_buf, &kBufRelease, nullptr);
     } else if (ctx.dmabuf_offered) {
       ctx.stride = static_cast<uint32_t>(ctx.width) * (bpp_from_fourcc(ctx.fmt) / 8);
 #ifdef EH_HAVE_LIBDRM
       if (!create_dmabuf_buffer(ctx, linux_dmabuf)) {
+        HS_LOG("batch_capture_outputs[%zu]: create_dmabuf_buffer failed (no color_mgr)", i);
         ctx.failed = true;
       }
 #else
+      HS_LOG("batch_capture_outputs[%zu]: DMABUF offered but no libdrm (no color_mgr)", i);
       ctx.failed = true;
 #endif
     } else {
+      HS_LOG("batch_capture_outputs[%zu]: no buffer path (dmabuf_offered=%d have_buffer=%d)", i, ctx.dmabuf_offered, ctx.have_buffer);
       ctx.failed = true;
     }
   }
@@ -1130,9 +1141,9 @@ bool batch_capture_outputs(
 
       bool any_alive = false;
       for (auto& c : ctxs) { if (c.frame && !c.failed) { any_alive = true; break; } }
-      if (!any_alive) break;
+      if (!any_alive) { HS_LOG("batch_capture_outputs phase2: no alive frames"); break; }
 
-      if (wl_display_dispatch(display) < 0) goto batch_cleanup;
+      if (wl_display_dispatch(display) < 0) { HS_LOG("batch_capture_outputs phase2: dispatch error"); goto batch_cleanup; }
     }
   }
 
@@ -1141,7 +1152,7 @@ bool batch_capture_outputs(
     for (size_t i = 0; i < outputs.size(); ++i) {
       auto& ctx = ctxs[i];
       auto& out = outputs[i];
-      scopy_log("batch phase6: i=%zu failed=%d phase2_success=%d map=%p w=%d h=%d stride=%d using_dmabuf=%d",
+      HS_LOG("batch phase6: i=%zu failed=%d phase2_success=%d map=%p w=%d h=%d stride=%d using_dmabuf=%d",
                 i, (int)ctx.failed, (int)ctx.phase2_success, (void*)ctx.map,
                 ctx.width, ctx.height, ctx.stride, (int)ctx.using_dmabuf);
       if (ctx.failed || !ctx.phase2_success) continue;
@@ -1149,7 +1160,7 @@ bool batch_capture_outputs(
       if (ctx.using_dmabuf && !ctx.map) {
 #ifdef EH_HAVE_LIBDRM
         if (!mmap_dmabuf_buffer(ctx)) {
-          scopy_log("batch phase6: mmap_dmabuf_buffer failed for i=%zu", i);
+          HS_LOG("batch phase6: mmap_dmabuf_buffer failed for i=%zu", i);
           continue;
         }
 #else
@@ -1169,7 +1180,7 @@ bool batch_capture_outputs(
 
       int hd_bpp = fmt_is_half_float(ctx.fmt) || fmt_is_16bit_int(ctx.fmt) ? 8 : 4;
       if (fmt_is_half_float(ctx.fmt)) {
-        scopy_log("wlr batch: half-float fmt=0x%x", ctx.fmt);
+        HS_LOG("wlr batch: half-float fmt=0x%x", ctx.fmt);
         out.hdr_linear_rgb.resize(static_cast<size_t>(out.native_w) * out.native_h * 3);
         out.rgba_pixels.resize(static_cast<size_t>(out.native_w) * out.native_h * 4);
         for (int y = 0; y < out.native_h; ++y) {
@@ -1213,7 +1224,7 @@ bool batch_capture_outputs(
           }
         }
       } else {
-        scopy_log("wlr batch: 8-bit fmt=0x%x", ctx.fmt);
+        HS_LOG("wlr batch: 8-bit fmt=0x%x", ctx.fmt);
         out.rgba_pixels.resize(static_cast<size_t>(out.native_w) * out.native_h * 4);
         for (int y = 0; y < out.native_h; ++y) {
           int sy = ctx.y_invert ? (out.native_h - 1 - y) : y;
@@ -1227,12 +1238,12 @@ bool batch_capture_outputs(
 
       out.captured = true;
       any_ok = true;
-      scopy_log("batch phase6: captured i=%zu native=%dx%d pix=%zu",
+      HS_LOG("batch phase6: captured i=%zu native=%dx%d pix=%zu",
                 i, out.native_w, out.native_h, out.rgba_pixels.size());
     }
 
     for (size_t i = 0; i < outputs.size(); ++i) {
-      scopy_log("batch final: i=%zu captured=%d native=%dx%d logical=%dx%d @(%d,%d)",
+      HS_LOG("batch final: i=%zu captured=%d native=%dx%d logical=%dx%d @(%d,%d)",
                 i, (int)outputs[i].captured,
                 outputs[i].native_w, outputs[i].native_h,
                 outputs[i].logical_w, outputs[i].logical_h,
@@ -1247,7 +1258,8 @@ bool batch_capture_outputs(
       if (ctx.using_dmabuf && ctx.drm_fd >= 0) { close(ctx.drm_fd); ctx.drm_fd = -1; }
     }
 
-    return any_ok;
+    HS_LOG("batch_capture_outputs: returning %d", any_ok);
+  return any_ok;
   }
 
 batch_cleanup:
@@ -1291,23 +1303,26 @@ static void ext_buf_release(void*, wl_buffer*) {}
 static constexpr wl_buffer_listener kExtBufRelease = {.release = ext_buf_release};
 
 static void ext_buffer_size(void* data, ext_image_copy_capture_session_v1*, uint32_t w, uint32_t h) {
-   
+  HS_LOG("ext_buffer_size %ux%u", w, h);
   auto* c = static_cast<ExtCaptureCtx*>(data);
   c->width = w;
   c->height = h;
 }
 
 static void ext_shm_format(void* data, ext_image_copy_capture_session_v1*, uint32_t format) {
+  HS_LOG("ext_shm_format fmt=0x%x", format);
   auto* c = static_cast<ExtCaptureCtx*>(data);
   c->fmt = format;
 }
 
 static void ext_done(void* data, ext_image_copy_capture_session_v1*) {
+  HS_LOG("ext_done");
   auto* c = static_cast<ExtCaptureCtx*>(data);
   c->constraints_done = true;
 }
 
 static void ext_stopped(void* data, ext_image_copy_capture_session_v1*) {
+  HS_LOG("ext_stopped");
   auto* c = static_cast<ExtCaptureCtx*>(data);
   c->failed = true;
 }
@@ -1331,11 +1346,12 @@ static void ext_frame_transform(void*, ext_image_copy_capture_frame_v1*, uint32_
 static void ext_frame_presentation_time(void*, ext_image_copy_capture_frame_v1*, uint32_t, uint32_t, uint32_t) {}
 
 static void ext_frame_ready(void* data, ext_image_copy_capture_frame_v1* fr) {
-  
+  HS_LOG("ext_frame_ready raw_mode=%d path='%s'", static_cast<ExtCaptureCtx*>(data)->raw_mode, static_cast<ExtCaptureCtx*>(data)->path_utf8.c_str());
   auto* c = static_cast<ExtCaptureCtx*>(data);
   (void)fr;
   c->frame_done = true;
   if (!c->map || c->width == 0 || c->height == 0) {
+    HS_LOG("ext_frame_ready: bad state (map=%p w=%u h=%u)", (void*)c->map, c->width, c->height);
     c->frame_ok = false;
     return;
   }
@@ -1421,7 +1437,7 @@ static void ext_frame_ready(void* data, ext_image_copy_capture_frame_v1* fr) {
 }
 
 static void ext_frame_failed(void* data, ext_image_copy_capture_frame_v1*, uint32_t) {
-   
+  HS_LOG("ext_frame_failed");
   auto* c = static_cast<ExtCaptureCtx*>(data);
   c->frame_done = true;
   c->frame_ok = false;
@@ -1436,6 +1452,7 @@ static constexpr ext_image_copy_capture_frame_v1_listener kExtFrameListener = {
 };
 
 static bool ext_dispatch_until(ExtCaptureCtx& c, bool (*pred)(const ExtCaptureCtx&)) {
+  HS_LOG("ext_dispatch_until");
   wl_display_flush(c.display);
   constexpr int kMax = 65536;
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -1443,7 +1460,7 @@ static bool ext_dispatch_until(ExtCaptureCtx& c, bool (*pred)(const ExtCaptureCt
     if (pred(c)) return !c.failed;
     if (c.failed) return false;
     if (std::chrono::steady_clock::now() >= deadline) {
-      std::cerr << "[ext_capture] timeout waiting for capture event\n";
+      HS_LOG("ext_dispatch_until: timeout waiting for capture event");
       return false;
     }
     const int r = wl_display_roundtrip(c.display);
@@ -1457,8 +1474,8 @@ static bool ext_capture_source_to_png(wl_display* display,
                                       ext_image_capture_source_v1* source,
                                       wl_shm* shm, bool overlay_cursor,
                                       std::string_view png_path) {
-   
-  if (!display || !copy_mgr || !source || !shm || png_path.empty()) return false;
+  HS_LOG("ext_capture_source_to_png path='%.*s'", (int)png_path.size(), png_path.data());
+  if (!display || !copy_mgr || !source || !shm || png_path.empty()) { HS_LOG("ext_capture_source_to_png: invalid args"); return false; }
 
   ExtCaptureCtx ctx{};
   ctx.display = display;
@@ -1467,14 +1484,16 @@ static bool ext_capture_source_to_png(wl_display* display,
 
   const uint32_t opts = overlay_cursor ? 1u : 0u;
   ctx.session = ext_image_copy_capture_manager_v1_create_session(copy_mgr, ctx.source, opts);
-  if (!ctx.session) return false;
+  if (!ctx.session) { HS_LOG("ext_capture_source_to_png: create_session failed"); return false; }
   ext_image_copy_capture_session_v1_add_listener(ctx.session, &kExtSessionListener, &ctx);
 
   if (!ext_dispatch_until(ctx, [](const ExtCaptureCtx& c) { return c.constraints_done || c.failed; })) {
+    HS_LOG("ext_capture_source_to_png: constraints dispatch failed (failed=%d w=%d h=%d)", ctx.failed, ctx.width, ctx.height);
     ext_image_copy_capture_session_v1_destroy(ctx.session);
     return false;
   }
   if (ctx.failed || ctx.width == 0 || ctx.height == 0) {
+    HS_LOG("ext_capture_source_to_png: constraints bad (failed=%d w=%d h=%d)", ctx.failed, ctx.width, ctx.height);
     ext_image_copy_capture_session_v1_destroy(ctx.session);
     return false;
   }
@@ -1489,16 +1508,19 @@ static bool ext_capture_source_to_png(wl_display* display,
     if (ctx.fd >= 0) unlink(tmpl);
   }
   if (ctx.fd < 0) {
+    HS_LOG("ext_capture_source_to_png: memfd/mkstemp failed");
     ext_image_copy_capture_session_v1_destroy(ctx.session);
     return false;
   }
   if (ftruncate(ctx.fd, static_cast<off_t>(ctx.map_size)) != 0) {
+    HS_LOG("ext_capture_source_to_png: ftruncate failed errno=%d", errno);
     close(ctx.fd);
     ext_image_copy_capture_session_v1_destroy(ctx.session);
     return false;
   }
   ctx.map = mmap(nullptr, ctx.map_size, PROT_READ | PROT_WRITE, MAP_SHARED, ctx.fd, 0);
   if (ctx.map == MAP_FAILED) {
+    HS_LOG("ext_capture_source_to_png: mmap failed errno=%d", errno);
     ctx.map = nullptr;
     close(ctx.fd);
     ext_image_copy_capture_session_v1_destroy(ctx.session);
@@ -1507,6 +1529,7 @@ static bool ext_capture_source_to_png(wl_display* display,
 
   wl_shm_pool* pool = wl_shm_create_pool(shm, ctx.fd, static_cast<int>(ctx.map_size));
   if (!pool) {
+    HS_LOG("ext_capture_source_to_png: wl_shm_create_pool failed");
     munmap(ctx.map, ctx.map_size);
     close(ctx.fd);
     ext_image_copy_capture_session_v1_destroy(ctx.session);
@@ -1516,6 +1539,7 @@ static bool ext_capture_source_to_png(wl_display* display,
                                          static_cast<int>(ctx.stride), static_cast<int>(ctx.fmt));
   wl_shm_pool_destroy(pool);
   if (!ctx.wl_buf) {
+    HS_LOG("ext_capture_source_to_png: wl_shm_pool_create_buffer failed");
     munmap(ctx.map, ctx.map_size);
     close(ctx.fd);
     ext_image_copy_capture_session_v1_destroy(ctx.session);
@@ -1525,6 +1549,7 @@ static bool ext_capture_source_to_png(wl_display* display,
 
   ctx.frame = ext_image_copy_capture_session_v1_create_frame(ctx.session);
   if (!ctx.frame) {
+    HS_LOG("ext_capture_source_to_png: create_frame failed");
     wl_buffer_destroy(ctx.wl_buf);
     munmap(ctx.map, ctx.map_size);
     close(ctx.fd);
@@ -1538,6 +1563,7 @@ static bool ext_capture_source_to_png(wl_display* display,
   wl_display_flush(display);
 
   if (!ext_dispatch_until(ctx, [](const ExtCaptureCtx& c) { return c.frame_done || c.failed; })) {
+    HS_LOG("ext_capture_source_to_png: frame dispatch failed (failed=%d frame_ok=%d)", ctx.failed, ctx.frame_ok);
     ext_image_copy_capture_frame_v1_destroy(ctx.frame);
     wl_buffer_destroy(ctx.wl_buf);
     munmap(ctx.map, ctx.map_size);
@@ -1561,6 +1587,7 @@ static bool ext_capture_source_to_png(wl_display* display,
   }
   ext_image_copy_capture_session_v1_destroy(ctx.session);
   ctx.session = nullptr;
+  HS_LOG("ext_capture_source_to_png: returning %d", ok);
   return ok;
 }
 
@@ -1571,8 +1598,8 @@ bool ext_capture_output_to_png(wl_display* display,
                                ext_output_image_capture_source_manager_v1* source_mgr,
                                wl_shm* shm, wl_output* output, bool overlay_cursor,
                                wp_color_manager_v1* color_mgr, std::string_view png_path) {
-   
-  if (!display || !copy_mgr || !source_mgr || !shm || !output || png_path.empty()) return false;
+  HS_LOG("ext_capture_output_to_png path='%.*s'", (int)png_path.size(), png_path.data());
+  if (!display || !copy_mgr || !source_mgr || !shm || !output || png_path.empty()) { HS_LOG("ext_capture_output_to_png: invalid args"); return false; }
 
   std::string path = std::string(png_path);
 
@@ -1585,22 +1612,25 @@ bool ext_capture_output_to_png(wl_display* display,
   ctx.max_lum = cs.max_lum;
 
   ctx.source = ext_output_image_capture_source_manager_v1_create_source(source_mgr, output);
-  if (!ctx.source) return false;
+  if (!ctx.source) { HS_LOG("ext_capture_output_to_png: create_source failed"); return false; }
 
   const uint32_t opts = overlay_cursor ? 1u : 0u;
   ctx.session = ext_image_copy_capture_manager_v1_create_session(copy_mgr, ctx.source, opts);
   if (!ctx.session) {
+    HS_LOG("ext_capture_output_to_png: create_session failed");
     ext_image_capture_source_v1_destroy(ctx.source);
     return false;
   }
   ext_image_copy_capture_session_v1_add_listener(ctx.session, &kExtSessionListener, &ctx);
 
   if (!ext_dispatch_until(ctx, [](const ExtCaptureCtx& c) { return c.constraints_done || c.failed; })) {
+    HS_LOG("ext_capture_output_to_png: constraints dispatch failed");
     ext_image_copy_capture_session_v1_destroy(ctx.session);
     ext_image_capture_source_v1_destroy(ctx.source);
     return false;
   }
   if (ctx.failed || ctx.width == 0 || ctx.height == 0) {
+    HS_LOG("ext_capture_output_to_png: constraints bad (failed=%d w=%d h=%d)", ctx.failed, ctx.width, ctx.height);
     ext_image_copy_capture_session_v1_destroy(ctx.session);
     ext_image_capture_source_v1_destroy(ctx.source);
     return false;
@@ -1616,11 +1646,13 @@ bool ext_capture_output_to_png(wl_display* display,
     if (ctx.fd >= 0) unlink(tmpl);
   }
   if (ctx.fd < 0) {
+    HS_LOG("ext_capture_output_to_png: memfd/mkstemp failed");
     ext_image_copy_capture_session_v1_destroy(ctx.session);
     ext_image_capture_source_v1_destroy(ctx.source);
     return false;
   }
   if (ftruncate(ctx.fd, static_cast<off_t>(ctx.map_size)) != 0) {
+    HS_LOG("ext_capture_output_to_png: ftruncate failed errno=%d", errno);
     close(ctx.fd);
     ext_image_copy_capture_session_v1_destroy(ctx.session);
     ext_image_capture_source_v1_destroy(ctx.source);
@@ -1628,6 +1660,7 @@ bool ext_capture_output_to_png(wl_display* display,
   }
   ctx.map = mmap(nullptr, ctx.map_size, PROT_READ | PROT_WRITE, MAP_SHARED, ctx.fd, 0);
   if (ctx.map == MAP_FAILED) {
+    HS_LOG("ext_capture_output_to_png: mmap failed errno=%d", errno);
     ctx.map = nullptr;
     close(ctx.fd);
     ext_image_copy_capture_session_v1_destroy(ctx.session);
@@ -1637,6 +1670,7 @@ bool ext_capture_output_to_png(wl_display* display,
 
   wl_shm_pool* pool = wl_shm_create_pool(shm, ctx.fd, static_cast<int>(ctx.map_size));
   if (!pool) {
+    HS_LOG("ext_capture_output_to_png: wl_shm_create_pool failed");
     munmap(ctx.map, ctx.map_size);
     close(ctx.fd);
     ext_image_copy_capture_session_v1_destroy(ctx.session);
@@ -1647,6 +1681,7 @@ bool ext_capture_output_to_png(wl_display* display,
                                          static_cast<int>(ctx.stride), static_cast<int>(ctx.fmt));
   wl_shm_pool_destroy(pool);
   if (!ctx.wl_buf) {
+    HS_LOG("ext_capture_output_to_png: wl_shm_pool_create_buffer failed");
     munmap(ctx.map, ctx.map_size);
     close(ctx.fd);
     ext_image_copy_capture_session_v1_destroy(ctx.session);
@@ -1657,6 +1692,7 @@ bool ext_capture_output_to_png(wl_display* display,
 
   ctx.frame = ext_image_copy_capture_session_v1_create_frame(ctx.session);
   if (!ctx.frame) {
+    HS_LOG("ext_capture_output_to_png: create_frame failed");
     wl_buffer_destroy(ctx.wl_buf);
     munmap(ctx.map, ctx.map_size);
     close(ctx.fd);
@@ -1671,6 +1707,7 @@ bool ext_capture_output_to_png(wl_display* display,
   wl_display_flush(display);
 
   if (!ext_dispatch_until(ctx, [](const ExtCaptureCtx& c) { return c.frame_done || c.failed; })) {
+    HS_LOG("ext_capture_output_to_png: frame dispatch failed");
     ext_image_copy_capture_frame_v1_destroy(ctx.frame);
     wl_buffer_destroy(ctx.wl_buf);
     munmap(ctx.map, ctx.map_size);
@@ -1697,6 +1734,7 @@ bool ext_capture_output_to_png(wl_display* display,
   ctx.session = nullptr;
   ext_image_capture_source_v1_destroy(ctx.source);
   ctx.source = nullptr;
+  HS_LOG("ext_capture_output_to_png: returning %d", ok);
   return ok;
 }
 
@@ -1706,17 +1744,21 @@ bool ext_capture_toplevel_to_png(wl_display* display,
                                   ext_foreign_toplevel_handle_v1* toplevel,
                                   wl_shm* shm, bool overlay_cursor,
                                   std::string_view png_path) {
-   
+  HS_LOG("ext_capture_toplevel_to_png path='%.*s'", (int)png_path.size(), png_path.data());
   if (!display || !copy_mgr || !toplevel_src_mgr || !toplevel || !shm || png_path.empty()) {
+    HS_LOG("ext_capture_toplevel_to_png: invalid args display=%d copy_mgr=%d src_mgr=%d toplevel=%d shm=%d",
+             (int)(display != nullptr), (int)(copy_mgr != nullptr), (int)(toplevel_src_mgr != nullptr),
+             (int)(toplevel != nullptr), (int)(shm != nullptr));
     return false;
   }
 
   ext_image_capture_source_v1* source =
       ext_foreign_toplevel_image_capture_source_manager_v1_create_source(toplevel_src_mgr, toplevel);
-  if (!source) return false;
+  if (!source) { HS_LOG("ext_capture_toplevel_to_png: create_source failed"); return false; }
 
   const bool ok = ext_capture_source_to_png(display, copy_mgr, source, shm, overlay_cursor, png_path);
   ext_image_capture_source_v1_destroy(source);
+  HS_LOG("ext_capture_toplevel_to_png: returning %d", ok);
   return ok;
 }
 
@@ -1726,6 +1768,7 @@ static bool ext_batch_dispatch_until(
     bool (*pred)(const ExtCaptureCtx&),
     int timeout_seconds)
 {
+  HS_LOG("ext_batch_dispatch_until ctxs=%zu timeout=%d", ctxs.size(), timeout_seconds);
   wl_display_flush(display);
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
   while (true) {
@@ -1737,9 +1780,9 @@ static bool ext_batch_dispatch_until(
       if (!pred(c)) { all_done = false; }  // continue checking others
     }
     if (all_done) return true;
-    if (!any_alive) return false;
-    if (std::chrono::steady_clock::now() >= deadline) return false;
-    if (wl_display_dispatch(display) < 0) return false;
+    if (!any_alive) { HS_LOG("ext_batch_dispatch_until: no alive sessions"); return false; }
+    if (std::chrono::steady_clock::now() >= deadline) { HS_LOG("ext_batch_dispatch_until: timeout"); return false; }
+    if (wl_display_dispatch(display) < 0) { HS_LOG("ext_batch_dispatch_until: dispatch error"); return false; }
   }
 }
 
@@ -1752,7 +1795,8 @@ bool batch_capture_outputs_ext(
     bool overlay_cursor,
     wp_color_manager_v1* color_mgr)
 {
-  if (outputs.empty() || !display || !copy_mgr || !source_mgr || !shm) return false;
+  HS_LOG("batch_capture_outputs_ext outputs=%zu", outputs.size());
+  if (outputs.empty() || !display || !copy_mgr || !source_mgr || !shm) { HS_LOG("batch_capture_outputs_ext: invalid args"); return false; }
 
   std::vector<ExtCaptureCtx> ctxs(outputs.size());
 
@@ -1774,14 +1818,14 @@ bool batch_capture_outputs_ext(
     ctx.display = display;
     ctx.raw_mode = true;
 
-    if (!outputs[i].output) { ctx.failed = true; continue; }
+    if (!outputs[i].output) { HS_LOG("batch_capture_outputs_ext[%zu]: null output", i); ctx.failed = true; continue; }
 
     ctx.source = ext_output_image_capture_source_manager_v1_create_source(source_mgr, outputs[i].output);
-    if (!ctx.source) { ctx.failed = true; continue; }
+    if (!ctx.source) { HS_LOG("batch_capture_outputs_ext[%zu]: create_source failed", i); ctx.failed = true; continue; }
 
     const uint32_t opts = overlay_cursor ? 1u : 0u;
     ctx.session = ext_image_copy_capture_manager_v1_create_session(copy_mgr, ctx.source, opts);
-    if (!ctx.session) { ctx.failed = true; continue; }
+    if (!ctx.session) { HS_LOG("batch_capture_outputs_ext[%zu]: create_session failed", i); ctx.failed = true; continue; }
 
     ext_image_copy_capture_session_v1_add_listener(ctx.session, &kExtSessionListener, &ctx);
   }
@@ -1789,6 +1833,7 @@ bool batch_capture_outputs_ext(
   {
     auto constraints_pred = [](const ExtCaptureCtx& c) { return c.constraints_done || c.failed; };
     if (!ext_batch_dispatch_until(display, ctxs, constraints_pred, 10)) {
+      HS_LOG("batch_capture_outputs_ext: constraints dispatch failed");
       cleanup_all(true);
       return false;
     }
@@ -1796,7 +1841,11 @@ bool batch_capture_outputs_ext(
 
   for (size_t i = 0; i < outputs.size(); ++i) {
     auto& ctx = ctxs[i];
-    if (ctx.failed || ctx.width == 0 || ctx.height == 0) { ctx.failed = true; continue; }
+    if (ctx.failed || ctx.width == 0 || ctx.height == 0) {
+      if (ctx.failed) HS_LOG("batch_capture_outputs_ext[%zu]: failed during constraints phase", i);
+      else HS_LOG("batch_capture_outputs_ext[%zu]: bad dims w=%d h=%d", i, ctx.width, ctx.height);
+      ctx.failed = true; continue;
+    }
 
     int bpp3 = (fmt_is_half_float(ctx.fmt) || fmt_is_16bit_int(ctx.fmt)) ? 8 : 4;
     ctx.stride = ctx.width * bpp3;
@@ -1807,27 +1856,28 @@ bool batch_capture_outputs_ext(
       ctx.fd = mkstemp(tmpl);
       if (ctx.fd >= 0) unlink(tmpl);
     }
-    if (ctx.fd < 0) { ctx.failed = true; continue; }
+    if (ctx.fd < 0) { HS_LOG("batch_capture_outputs_ext[%zu]: memfd/mkstemp failed", i); ctx.failed = true; continue; }
     if (ftruncate(ctx.fd, static_cast<off_t>(ctx.map_size)) != 0) {
+      HS_LOG("batch_capture_outputs_ext[%zu]: ftruncate failed errno=%d", i, errno);
       close(ctx.fd); ctx.fd = -1; ctx.failed = true; continue;
     }
 
     ctx.map = mmap(nullptr, ctx.map_size, PROT_READ | PROT_WRITE, MAP_SHARED, ctx.fd, 0);
-    if (ctx.map == MAP_FAILED) { ctx.map = nullptr; close(ctx.fd); ctx.fd = -1; ctx.failed = true; continue; }
+    if (ctx.map == MAP_FAILED) { HS_LOG("batch_capture_outputs_ext[%zu]: mmap failed errno=%d", i, errno); ctx.map = nullptr; close(ctx.fd); ctx.fd = -1; ctx.failed = true; continue; }
 
     wl_shm_pool* pool = wl_shm_create_pool(shm, ctx.fd, static_cast<int>(ctx.map_size));
-    if (!pool) { ctx.failed = true; continue; }
+    if (!pool) { HS_LOG("batch_capture_outputs_ext[%zu]: wl_shm_create_pool failed", i); ctx.failed = true; continue; }
 
     ctx.wl_buf = wl_shm_pool_create_buffer(
         pool, 0, static_cast<int>(ctx.width), static_cast<int>(ctx.height),
         static_cast<int>(ctx.stride), static_cast<int>(ctx.fmt));
     wl_shm_pool_destroy(pool);
-    if (!ctx.wl_buf) { ctx.failed = true; continue; }
+    if (!ctx.wl_buf) { HS_LOG("batch_capture_outputs_ext[%zu]: wl_shm_pool_create_buffer failed", i); ctx.failed = true; continue; }
 
     wl_buffer_add_listener(ctx.wl_buf, &kExtBufRelease, nullptr);
 
     ctx.frame = ext_image_copy_capture_session_v1_create_frame(ctx.session);
-    if (!ctx.frame) { ctx.failed = true; continue; }
+    if (!ctx.frame) { HS_LOG("batch_capture_outputs_ext[%zu]: create_frame failed", i); ctx.failed = true; continue; }
 
     ext_image_copy_capture_frame_v1_add_listener(ctx.frame, &kExtFrameListener, &ctx);
     ext_image_copy_capture_frame_v1_attach_buffer(ctx.frame, ctx.wl_buf);
@@ -1838,6 +1888,7 @@ bool batch_capture_outputs_ext(
   {
     auto frame_pred = [](const ExtCaptureCtx& c) { return c.frame_done || c.failed; };
     if (!ext_batch_dispatch_until(display, ctxs, frame_pred, 10)) {
+      HS_LOG("batch_capture_outputs_ext: frame dispatch failed");
       cleanup_all(true);
       return false;
     }
@@ -1859,7 +1910,7 @@ bool batch_capture_outputs_ext(
     }
 
     if (fmt_is_half_float(ctx.fmt)) {
-      scopy_log("ext batch: half-float fmt=0x%x", ctx.fmt);
+      HS_LOG("ext batch: half-float fmt=0x%x", ctx.fmt);
       out.hdr_linear_rgb.resize(static_cast<size_t>(out.native_w) * out.native_h * 3);
       out.rgba_pixels.resize(static_cast<size_t>(out.native_w) * out.native_h * 4);
       for (int y = 0; y < out.native_h; ++y) {
@@ -1884,7 +1935,7 @@ bool batch_capture_outputs_ext(
         }
       }
     } else if (fmt_is_high_depth(ctx.fmt)) {
-      scopy_log("ext batch: high-depth fmt=0x%x", ctx.fmt);
+      HS_LOG("ext batch: high-depth fmt=0x%x", ctx.fmt);
       int hd_bpp = fmt_is_16bit_int(ctx.fmt) ? 8 : 4;
       out.hdr_linear_rgb.resize(static_cast<size_t>(out.native_w) * out.native_h * 3);
       out.rgba_pixels.resize(static_cast<size_t>(out.native_w) * out.native_h * 4);
@@ -1903,7 +1954,7 @@ bool batch_capture_outputs_ext(
         }
       }
     } else {
-      scopy_log("ext batch: 8-bit fmt=0x%x", ctx.fmt);
+      HS_LOG("ext batch: 8-bit fmt=0x%x", ctx.fmt);
       out.rgba_pixels.resize(static_cast<size_t>(out.native_w) * out.native_h * 4);
       for (int y = 0; y < out.native_h; ++y) {
         const auto* row = static_cast<const uint8_t*>(ctx.map) + static_cast<size_t>(y) * ctx.stride;
@@ -1919,6 +1970,7 @@ bool batch_capture_outputs_ext(
   }
 
   cleanup_all(true);
+  HS_LOG("batch_capture_outputs_ext: returning %d", any_ok);
   return any_ok;
 }
 

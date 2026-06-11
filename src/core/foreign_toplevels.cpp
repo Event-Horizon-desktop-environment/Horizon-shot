@@ -1,4 +1,5 @@
 #include "core/foreign_toplevels.hpp"
+#include "core/logging.hpp"
 
 #include <algorithm>
 #include <wayland-client.h>
@@ -11,7 +12,8 @@ ExtForeignToplevels::~ExtForeignToplevels() { shutdown(); }
 
 void ExtForeignToplevels::bind(ext_foreign_toplevel_list_v1* list, wl_display* display)
 {
-  if (!list || list_ == list) return;
+  HS_LOG("ExtForeignToplevels::bind list=%p display=%p", (void*)list, (void*)display);
+  if (!list || list_ == list) { HS_LOG("ExtForeignToplevels::bind: already bound or null"); return; }
   list_ = list;
   display_ = display;
 
@@ -24,6 +26,7 @@ void ExtForeignToplevels::bind(ext_foreign_toplevel_list_v1* list, wl_display* d
 
 void ExtForeignToplevels::shutdown()
 {
+  HS_LOG("ExtForeignToplevels::shutdown toplevels=%zu", toplevels_.size());
   if (display_ && wl_display_get_error(display_)) {
     display_ = nullptr;
     for (auto& tl : toplevels_) tl.handle = nullptr;
@@ -48,8 +51,9 @@ void ExtForeignToplevels::shutdown()
 }
 
 void ExtForeignToplevels::on_toplevel(void* data, ext_foreign_toplevel_list_v1*,
-                                       ext_foreign_toplevel_handle_v1* handle)
+                                        ext_foreign_toplevel_handle_v1* handle)
 {
+  HS_LOG("ExtForeignToplevels::on_toplevel handle=%p", (void*)handle);
   auto& self = *static_cast<ExtForeignToplevels*>(data);
   Toplevel tl;
   tl.handle = handle;
@@ -67,6 +71,7 @@ void ExtForeignToplevels::on_toplevel(void* data, ext_foreign_toplevel_list_v1*,
 
 void ExtForeignToplevels::on_finished(void* data, ext_foreign_toplevel_list_v1* list)
 {
+  HS_LOG("ExtForeignToplevels::on_finished");
   auto& self = *static_cast<ExtForeignToplevels*>(data);
   (void)list;
   if (self.display_ && !self.initialSyncDone_) {
@@ -77,6 +82,7 @@ void ExtForeignToplevels::on_finished(void* data, ext_foreign_toplevel_list_v1* 
 
 void ExtForeignToplevels::on_closed(void* data, ext_foreign_toplevel_handle_v1* handle)
 {
+  HS_LOG("ExtForeignToplevels::on_closed handle=%p", (void*)handle);
   auto& self = *static_cast<ExtForeignToplevels*>(data);
   auto it = std::remove_if(self.toplevels_.begin(), self.toplevels_.end(),
                             [handle](const Toplevel& t) { return t.handle == handle; });

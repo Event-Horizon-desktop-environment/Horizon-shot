@@ -1,4 +1,5 @@
 #include "shm_buffer.hpp"
+#include "core/logging.hpp"
 #include "memfd.hpp"
 
 #include <fcntl.h>
@@ -16,12 +17,14 @@ void ShmBuffer::set_release_hook(ReleaseHook hook, void* user) {
 }
 
 void ShmBuffer::wl_release(void* data, wl_buffer*) {
+  HS_LOG("ShmBuffer::wl_release data=%p", data);
   auto* self = static_cast<ShmBuffer*>(data);
   self->busy_ = false;
   if (self->hook_) self->hook_(self->hookUser_);
 }
 
 void ShmBuffer::destroy() {
+  HS_LOG("ShmBuffer::destroy buffer_=%p data_=%p", (void*)buffer_, (void*)data_);
   hook_ = nullptr;
   hookUser_ = nullptr;
   if (cr_) cairo_destroy(cr_);
@@ -43,7 +46,8 @@ void ShmBuffer::destroy() {
 }
 
 bool ShmBuffer::ensure(wl_shm* shm, const char* tag, int width, int height) {
-  if (!shm || width <= 0 || height <= 0) return false;
+  HS_LOG("ShmBuffer::ensure shm=%p tag='%s' %dx%d", (void*)shm, tag ? tag : "(null)", width, height);
+  if (!shm || width <= 0 || height <= 0) { HS_LOG("ShmBuffer::ensure: invalid args"); return false; }
   if (buffer_ && width_ == width && height_ == height) return true;
 
   destroy();

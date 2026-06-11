@@ -7,6 +7,8 @@
 #include "core/wayland_connection.hpp"
 #include "ext-foreign-toplevel-list-v1-client-protocol.h"
 
+#include "core/logging.hpp"
+
 #include <cairo/cairo.h>
 
 #include <algorithm>
@@ -105,6 +107,7 @@ static void draw_text_centered(cairo_t* cr, const char* text, double cx, double 
 
 static void draw_preview(AppState& app, cairo_t* cr, const Layout& l)
 {
+  HS_LOG("draw_preview: enter captured_valid=%d zoom=%.2f", app.captured.valid, app.zoom);
   set_surface_dim(cr, app, 0.75);
   cairo_rectangle(cr, l.preview_x, l.preview_y,
                   l.preview_w, l.preview_h);
@@ -177,6 +180,7 @@ static void draw_grid_cell(cairo_t* cr, const AppState& app, const Layout& l,
 
 static void draw_output_list(AppState& app, cairo_t* cr, const Layout& l)
 {
+  HS_LOG("draw_output_list: enter outputs=%zu selected=%d", app.output_list.size(), app.selected_output_idx);
   if (app.source != Source::Screen || app.output_list.empty()) return;
 
   int list_section_y = l.list_y;
@@ -252,6 +256,7 @@ static void draw_output_list(AppState& app, cairo_t* cr, const Layout& l)
 
 static void draw_window_list(AppState& app, cairo_t* cr, const Layout& l)
 {
+  HS_LOG("draw_window_list: enter windows=%zu selected=%d", app.window_list.size(), app.selected_window_idx);
   if (app.source != Source::Window || app.window_list.empty()) return;
 
   int list_section_y = l.list_y;
@@ -356,6 +361,7 @@ static void draw_export_bar(AppState& app, cairo_t* cr, const Layout& l)
 
 static void draw_sidebar(AppState& app, cairo_t* cr, const Layout& l)
 {
+  HS_LOG("draw_sidebar: enter source=%d", (int)app.source);
   set_panel(cr, app, 0.75);
   cairo_rectangle(cr, l.sidebar_x, l.sidebar_y, l.sidebar_w, l.sidebar_h);
   cairo_fill(cr);
@@ -392,6 +398,7 @@ static void draw_sidebar(AppState& app, cairo_t* cr, const Layout& l)
 
 void paint_frame(AppState& app)
 {
+  HS_LOG("paint_frame: enter width=%d height=%d", app.width, app.height);
   if (!app.shm || !app.surface) return;
 
   int bi = app.paint_buf;

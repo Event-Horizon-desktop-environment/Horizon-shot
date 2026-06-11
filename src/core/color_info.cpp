@@ -1,4 +1,5 @@
 #include "core/color_info.hpp"
+#include "core/logging.hpp"
 
 #include "color-management-v1-client-protocol.h"
 
@@ -9,8 +10,9 @@ namespace hs::core {
 
 OutputColorInfo query_output_color_info(wl_display* display, wp_color_manager_v1* mgr, wl_output* output)
 {
+  HS_LOG("query_output_color_info display=%p mgr=%p output=%p", (void*)display, (void*)mgr, (void*)output);
   OutputColorInfo result{};
-  if (!display || !mgr || !output) return result;
+  if (!display || !mgr || !output) { HS_LOG("query_output_color_info: invalid args"); return result; }
 
   struct Ctx { bool ready = false; bool failed = false; };
   auto* cm_out = wp_color_manager_v1_get_output(mgr, output);
@@ -94,6 +96,7 @@ OutputColorInfo query_output_color_info(wl_display* display, wp_color_manager_v1
   wp_image_description_v1_destroy(desc);
   wp_color_management_output_v1_destroy(cm_out);
 
+  HS_LOG("query_output_color_info: is_hdr=%d is_10bit=%d max_lum=%u", result.is_hdr, result.is_10bit, result.max_lum);
   return result;
 }
 

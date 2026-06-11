@@ -9,6 +9,8 @@
 #include "xdg-shell-client-protocol.h"
 #include "ext-foreign-toplevel-list-v1-client-protocol.h"
 
+#include "core/logging.hpp"
+
 #include <algorithm>
 #include <cstdarg>
 #include <cerrno>
@@ -23,19 +25,6 @@
 #include <unistd.h>
 
 namespace hs::screenshot {
-
-static void app_log(const char* fmt, ...) {
-  va_list ap;
-  va_start(ap, fmt);
-  FILE* f = fopen("/tmp/eh-shot.log", "a");
-  if (f) {
-    fprintf(f, "[app] ");
-    vfprintf(f, fmt, ap);
-    fprintf(f, "\n");
-    fclose(f);
-  }
-  va_end(ap);
-}
 
 AppState::AppState() = default;
 
@@ -59,6 +48,7 @@ static constexpr xdg_wm_base_listener kXdgWmBaseListener{
 static void xdg_surface_configure(void* data, xdg_surface* surface, uint32_t serial)
 {
   auto& app = *static_cast<AppState*>(data);
+  HS_LOG("xdg_surface_configure: serial=%u w=%d h=%d", serial, app.width, app.height);
   xdg_surface_ack_configure(surface, serial);
   if (app.width <= 0 || app.height <= 0) return;
   if (app.width < app.minWidth) app.width = app.minWidth;
@@ -69,6 +59,7 @@ static void xdg_surface_configure(void* data, xdg_surface* surface, uint32_t ser
 static void toplevel_configure(void* data, xdg_toplevel*, int32_t w, int32_t h, wl_array*)
 {
   auto& app = *static_cast<AppState*>(data);
+  HS_LOG("toplevel_configure: w=%d h=%d", w, h);
   if (w > 0) app.width = w;
   if (h > 0) app.height = h;
   if (app.width < app.minWidth) app.width = app.minWidth;
@@ -78,6 +69,7 @@ static void toplevel_configure(void* data, xdg_toplevel*, int32_t w, int32_t h, 
 static void toplevel_close(void* data, xdg_toplevel*)
 {
   auto& app = *static_cast<AppState*>(data);
+  HS_LOG("toplevel_close");
   app.running = false;
 }
 
@@ -95,6 +87,7 @@ static constexpr xdg_toplevel_listener kToplevelListener{
 static void on_shm_release(void* user)
 {
   auto& app = *static_cast<AppState*>(user);
+  HS_LOG("on_shm_release");
   if (!app.surface) return;
   app.pendingRedraw = false;
   paint_frame(app);
@@ -102,21 +95,33 @@ static void on_shm_release(void* user)
 
 static void refresh_window_list(AppState& app)
 {
+  HS_LOG("refresh_window_list: enter");
   app.window_list.clear();
-  if (!app.wl.has_ext_foreign_toplevel_list()) {
-    app_log("refresh_window_list: no ext_foreign_toplevel_list available");
-    return;
-  }
-  app_log("refresh_window_list: %zu toplevels found", app.wl.ext_foreign_toplevels().list().size());
 
-  const auto& toplevels = app.wl.ext_foreign_toplevels().list();
-  for (const auto& tl : toplevels) {
-    WindowEntry entry;
-    entry.handle = tl.handle;
-    entry.appId = tl.appId;
-    entry.title = tl.title;
-    entry.identifier = tl.identifier;
-    app.window_list.push_back(std::move(entry));
+  if (app.wl.has_ext_foreign_toplevel_list()) {
+    HS_LOG("refresh_window_list: %zu ext toplevels found", app.wl.ext_foreign_toplevels().list().size());
+    const auto& toplevels = app.wl.ext_foreign_toplevels().list();
+    for (const auto& tl : toplevels) {
+      WindowEntry entry;
+      entry.handle = tl.handle;
+      entry.appId = tl.appId;
+      entry.title = tl.title;
+      entry.identifier = tl.identifier;
+      app.window_list.push_back(std::move(entry));
+    }
+  } else if (app.wl.has_wlr_foreign_toplevel_manager()) {
+    HS_LOG("refresh_window_list: %zu wlr toplevels found", app.wl.wlr_foreign_toplevels().list().size());
+    const auto& toplevels = app.wl.wlr_foreign_toplevels().list();
+    for (const auto& tl : toplevels) {
+      WindowEntry entry;
+      entry.handle = nullptr;
+      entry.appId = tl.appId;
+      entry.title = tl.title;
+      app.window_list.push_back(std::move(entry));
+    }
+  } else {
+    HS_LOG("refresh_window_list: no toplevel list available");
+    return;
   }
 
   if (app.source == Source::Window && app.selected_window_idx < 0 && !app.window_list.empty()) {
@@ -130,14 +135,16 @@ static void refresh_window_list(AppState& app)
 
 static void init_palette(AppState& app)
 {
+  HS_LOG("init_palette: enter");
   const auto& sc = hs::config::shell_config_snapshot_skip_matugen();
   app.chrome = hs::config::derived_chrome_colors(sc.appearance);
 }
 
 static bool bind_globals(AppState& app)
 {
+  HS_LOG("bind_globals: enter");
   auto* display = app.wl.display();
-  if (!display) return false;
+  if (!display) { HS_LOG("bind_globals: no display"); return false; }
 
   struct Globals {
     wl_compositor* compositor = nullptr;
@@ -171,28 +178,30 @@ static bool bind_globals(AppState& app)
   wl_display_roundtrip(display);
 
   if (!g.compositor || !g.xdgBase || !g.shm) {
-    app_log("bind_globals: FAILED compositor=%p xdgBase=%p shm=%p",
+    HS_LOG("bind_globals: FAILED compositor=%p xdgBase=%p shm=%p",
             (void*)g.compositor, (void*)g.xdgBase, (void*)g.shm);
     return false;
   }
 
   app.compositor = g.compositor;
   app.shm = g.shm;
-  app_log("bind_globals: compositor=%p xdgBase=%p shm=%p seat=%p",
+  HS_LOG("bind_globals: compositor=%p xdgBase=%p shm=%p seat=%p",
           (void*)g.compositor, (void*)g.xdgBase, (void*)g.shm, (void*)app.wl.seat());
 
   if (app.wl.seat()) {
     app.seat.bind(app.wl.seat());
-    app_log("bind_globals: seat bound, has_pointer=%d", app.seat.pointer() != nullptr);
+    HS_LOG("bind_globals: seat bound, has_pointer=%d", app.seat.pointer() != nullptr);
   }
 
+  HS_LOG("bind_globals: success");
   return true;
 }
 
 static bool create_window(AppState& app)
 {
+  HS_LOG("create_window: enter");
   auto* display = app.wl.display();
-  if (!display) return false;
+  if (!display) { HS_LOG("create_window: no display"); return false; }
 
   struct WinGlobals {
     wl_compositor* comp = nullptr;
@@ -224,7 +233,7 @@ static bool create_window(AppState& app)
   wl_display_roundtrip(display);
 
   if (!wg.comp || !wg.xdg || !wg.shm) {
-    app_log("create_window: FAILED comp=%p xdg=%p shm=%p",
+    HS_LOG("create_window: FAILED comp=%p xdg=%p shm=%p",
             (void*)wg.comp, (void*)wg.xdg, (void*)wg.shm);
     return false;
   }
@@ -232,33 +241,41 @@ static bool create_window(AppState& app)
   app.shm = wg.shm;
   app.compositor = wg.comp;
   app.surface = wl_compositor_create_surface(wg.comp);
-  if (!app.surface) { app_log("create_window: wl_compositor_create_surface failed"); return false; }
-  app_log("create_window: surface=%p", (void*)app.surface);
+  if (!app.surface) { HS_LOG("create_window: wl_compositor_create_surface failed"); return false; }
+  HS_LOG("create_window: surface=%p", (void*)app.surface);
 
   app.xdgSurface = xdg_wm_base_get_xdg_surface(wg.xdg, app.surface);
-  if (!app.xdgSurface) { app_log("create_window: xdg_wm_base_get_xdg_surface failed"); return false; }
+  if (!app.xdgSurface) { HS_LOG("create_window: xdg_wm_base_get_xdg_surface failed"); return false; }
   xdg_surface_add_listener(app.xdgSurface, &kXdgSurfaceListener, &app);
 
   app.toplevel = xdg_surface_get_toplevel(app.xdgSurface);
-  if (!app.toplevel) { app_log("create_window: xdg_surface_get_toplevel failed"); return false; }
+  if (!app.toplevel) { HS_LOG("create_window: xdg_surface_get_toplevel failed"); return false; }
   xdg_toplevel_add_listener(app.toplevel, &kToplevelListener, &app);
   xdg_toplevel_set_title(app.toplevel, "Screenshot");
   xdg_toplevel_set_app_id(app.toplevel, "event-horizon-screenshot");
   xdg_toplevel_set_min_size(app.toplevel, app.minWidth, app.minHeight);
 
-  app.buf[0].ensure(wg.shm, "eh-shot-a", app.width, app.height);
+  if (!app.buf[0].ensure(wg.shm, "eh-shot-a", app.width, app.height)) {
+    HS_LOG("create_window: buf[0].ensure failed");
+    return false;
+  }
   app.buf[0].set_release_hook(on_shm_release, &app);
-  app.buf[1].ensure(wg.shm, "eh-shot-b", app.width, app.height);
+  if (!app.buf[1].ensure(wg.shm, "eh-shot-b", app.width, app.height)) {
+    HS_LOG("create_window: buf[1].ensure failed");
+    return false;
+  }
   app.buf[1].set_release_hook(on_shm_release, &app);
 
   wl_surface_commit(app.surface);
   wl_display_flush(display);
 
+  HS_LOG("create_window: success");
   return true;
 }
 
 int run_screenshot_app(bool select_on_launch)
 {
+  HS_LOG("run_screenshot_app: enter select_on_launch=%d", select_on_launch);
   (void)fopen("/tmp/eh-shot.log", "w");
   auto app_ptr = std::make_unique<AppState>();
   AppState& app = *app_ptr;
@@ -273,7 +290,7 @@ int run_screenshot_app(bool select_on_launch)
     std::cerr << "WAYLAND_DISPLAY not set or compositor unavailable.\n";
     return 1;
   }
-  app_log("run_screenshot_app: connected to Wayland");
+  HS_LOG("run_screenshot_app: connected to Wayland");
 
   wl_display_roundtrip(app.wl.display());
 
@@ -281,37 +298,45 @@ int run_screenshot_app(bool select_on_launch)
     std::cerr << "Failed to bind Wayland globals.\n";
     return 1;
   }
-  app_log("run_screenshot_app: globals bound");
+  HS_LOG("run_screenshot_app: globals bound");
+
+  {
+    const auto sc = hs::config::shell_config_snapshot_skip_matugen();
+    app.iconCache.set_icon_theme(sc.appearance.iconTheme);
+  }
 
   if (!create_window(app)) {
     std::cerr << "Failed to create window.\n";
     return 1;
   }
-  app_log("run_screenshot_app: window created (surface=%p)", (void*)app.surface);
+  HS_LOG("run_screenshot_app: window created (surface=%p)", (void*)app.surface);
+
+  wl_display_roundtrip(app.wl.display());
+  HS_LOG("run_screenshot_app: after roundtrip (expecting configure event)");
 
   {
     auto* extMgr = app.wl.ext_data_control_manager();
     auto* wlrMgr = app.wl.wlr_data_control_manager();
     if (extMgr) {
       app.clipboard.bind_ext(extMgr, app.wl.seat(), app.wl.display());
-      app_log("run_screenshot_app: clipboard bound (ext)");
+      HS_LOG("run_screenshot_app: clipboard bound (ext)");
     } else if (wlrMgr) {
       app.clipboard.bind_wlr(wlrMgr, app.wl.seat(), app.wl.display());
-      app_log("run_screenshot_app: clipboard bound (wlr)");
+      HS_LOG("run_screenshot_app: clipboard bound (wlr)");
     } else {
-      app_log("run_screenshot_app: no clipboard manager available");
+      HS_LOG("run_screenshot_app: no clipboard manager available");
     }
   }
 
-  if (app.wl.has_ext_foreign_toplevel_list()) {
+  if (app.wl.has_any_toplevel_list()) {
     wl_display_roundtrip(app.wl.display());
     wl_display_roundtrip(app.wl.display());
     refresh_window_list(app);
-    app.ext_toplevel_available = true;
-    app_log("run_screenshot_app: ext_foreign_toplevel_list available, %zu windows found",
+    app.toplevel_available = true;
+    HS_LOG("run_screenshot_app: toplevel list available, %zu windows found",
             app.window_list.size());
   } else {
-    app_log("run_screenshot_app: no ext_foreign_toplevel_list - window mode unavailable");
+    HS_LOG("run_screenshot_app: no toplevel list - window mode unavailable");
   }
 
   refresh_window_list(app);
@@ -371,9 +396,10 @@ int run_screenshot_app(bool select_on_launch)
   constexpr int kPollMs = 5000;
 
   while (app.running && g_signal == 0) {
-    if (app.ext_toplevel_available) {
-      static int counter = 0;
-      if (counter++ % 10 == 0) {
+    if (app.toplevel_available) {
+      if (app.wl.has_wlr_foreign_toplevel_manager()
+            ? app.wl.wlr_foreign_toplevels().dirty()
+            : app.refresh_counter++ % 10 == 0) {
         refresh_window_list(app);
       }
     }
@@ -416,11 +442,13 @@ int run_screenshot_app(bool select_on_launch)
   }
 
   app_ptr = nullptr;
+  HS_LOG("run_screenshot_app: exit success");
   return 0;
 }
 
 int run_screenshot_cli(const AppOptions& opts)
 {
+  HS_LOG("run_screenshot_cli: enter mode=%d output=%s copy=%d", (int)opts.mode, opts.output_path.c_str(), opts.copy);
   bool ok = false;
   std::string out_path = opts.output_path;
 
@@ -553,6 +581,7 @@ int run_screenshot_cli(const AppOptions& opts)
 
   clipboard.cleanup();
   wl.disconnect();
+  HS_LOG("run_screenshot_cli: exit success");
   return 0;
 }
 

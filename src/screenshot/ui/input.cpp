@@ -5,6 +5,8 @@
 #include "core/screencopy.hpp"
 #include "core/file_chooser_dialog.hpp"
 
+#include "core/logging.hpp"
+
 #include <algorithm>
 #include <cstdarg>
 #include <atomic>
@@ -94,16 +96,9 @@ static void do_export_png(AppState& app);
 static void do_save_as(AppState& app);
 static void do_copy_png(AppState& app);
 
-static void in_log(const char* fmt, ...) {
-  va_list ap;
-  va_start(ap, fmt);
-  FILE* f = fopen("/tmp/eh-shot.log", "a");
-  if (f) { fprintf(f, "[input] "); vfprintf(f, fmt, ap); fprintf(f, "\n"); fclose(f); }
-  va_end(ap);
-}
-
 void trigger_capture(AppState& app)
 {
+  HS_LOG("trigger_capture: enter source=%d selected_window=%d", (int)app.source, app.selected_window_idx);
   char tmp_pattern[] = "/tmp/eh-shot-XXXXXX";
   int fd = mkstemp(tmp_pattern);
   if (fd < 0) {
@@ -117,14 +112,17 @@ void trigger_capture(AppState& app)
   bool ok = false;
   switch (app.source) {
   case Source::Focused:
-    in_log("trigger_capture: Focused");
+    HS_LOG("trigger_capture: Focused");
     ok = capture_focused_window(app.wl, out_path);
     break;
   case Source::Window:
-    in_log("trigger_capture: Window (idx=%d)", app.selected_window_idx);
+    HS_LOG("trigger_capture: Window (idx=%d)", app.selected_window_idx);
     if (app.selected_window_idx >= 0 &&
         app.selected_window_idx < static_cast<int>(app.window_list.size())) {
       auto* handle = app.window_list[app.selected_window_idx].handle;
+      if (!handle) {
+        HS_LOG("trigger_capture: Window mode handle is null (wlr-foreign-toplevel, no ext-image-copy-capture) - falling back to screen capture");
+      }
       ok = capture_window_by_handle(app.wl, handle, out_path);
     } else {
       app.status = "No window selected";
@@ -135,25 +133,25 @@ void trigger_capture(AppState& app)
     break;
   case Source::Screen:
     if (app.capture_all_screens) {
-      in_log("trigger_capture: all screens");
+      HS_LOG("trigger_capture: all screens");
       app.captured_hdr = {};
       ok = capture_all_screens(app.wl, out_path, &app.captured_hdr);
     } else if (app.selected_output_idx >= 0 &&
                app.selected_output_idx < static_cast<int>(app.output_list.size())) {
-      in_log("trigger_capture: output idx=%d", app.selected_output_idx);
+      HS_LOG("trigger_capture: output idx=%d", app.selected_output_idx);
       app.captured_hdr = {};
       ok = capture_output(app.wl, app.output_list[app.selected_output_idx].output, out_path, &app.captured_hdr);
     } else {
-      in_log("trigger_capture: single screen (no output selected)");
+      HS_LOG("trigger_capture: single screen (no output selected)");
       ok = capture_screen(app.wl, out_path);
     }
     break;
   case Source::Selection:
     {
-      in_log("trigger_capture: Selection - refreshing outputs");
+      HS_LOG("trigger_capture: Selection - refreshing outputs");
       app.wl.refresh_logical_outputs();
       auto bounds = app.wl.logical_output_bounds();
-      in_log("trigger_capture: Selection - %zu logical bounds", bounds.size());
+      HS_LOG("trigger_capture: Selection - %zu logical bounds", bounds.size());
       ok = capture_selection_interactive(app.wl, bounds, out_path);
       wl_display_roundtrip(app.wl.display());
     }
@@ -190,16 +188,24 @@ void trigger_capture(AppState& app)
   app.last_capture_path = out_path;
 
   if (app.captured.valid) {
-    app.status = "Captured";
+    if (app.source == Source::Window && app.selected_window_idx >= 0 &&
+        static_cast<size_t>(app.selected_window_idx) < app.window_list.size() &&
+        !app.window_list[app.selected_window_idx].handle) {
+      app.status = "Full screen captured (window mode unavailable)";
+    } else {
+      app.status = "Captured";
+    }
     do_copy_png(app);
   } else {
     app.status = "Could not load preview";
   }
   app.pendingRedraw = true;
+  HS_LOG("trigger_capture: exit captured_valid=%d", app.captured.valid);
 }
 
 static void do_export_png(AppState& app)
 {
+  HS_LOG("do_export_png: enter");
   if (app.last_capture_path.empty() || !app.captured.valid) {
     app.status = "Nothing to export";
     app.pendingRedraw = true;
@@ -292,6 +298,7 @@ static void do_export_png(AppState& app)
 
 static void do_save_as(AppState& app)
 {
+  HS_LOG("do_save_as: enter");
   if (app.last_capture_path.empty() || !app.captured.valid) {
     app.status = "Nothing to export";
     app.pendingRedraw = true;
@@ -374,10 +381,12 @@ static void do_save_as(AppState& app)
     app.status = "Export failed";
   }
   app.pendingRedraw = true;
+  HS_LOG("do_save_as: exit ok=%d", ok);
 }
 
 static void do_copy_png(AppState& app)
 {
+  HS_LOG("do_copy_png: enter");
   if (app.last_capture_path.empty() || !app.captured.valid) {
     app.status = "Nothing to copy";
     app.pendingRedraw = true;
@@ -435,10 +444,12 @@ static void do_copy_png(AppState& app)
     app.status = "Clipboard failed";
   }
   app.pendingRedraw = true;
+  HS_LOG("do_copy_png: exit");
 }
 
 void handle_click(AppState& app, int x, int y)
 {
+  HS_LOG("handle_click: enter x=%d y=%d", x, y);
   auto l = compute_layout(app.width, app.height);
 
   int cell = hit_grid_cell(l, x, y);
@@ -535,6 +546,7 @@ void handle_click(AppState& app, int x, int y)
 
 void handle_release(AppState& app)
 {
+  HS_LOG("handle_release: enter");
   app.dragging = false;
   app.pressed_item = -1;
   app.pressed_area = 0;
@@ -543,6 +555,7 @@ void handle_release(AppState& app)
 
 void handle_motion(AppState& app, int x, int y)
 {
+  HS_LOG("handle_motion: enter x=%d y=%d", x, y);
   auto l = compute_layout(app.width, app.height);
 
   int old_item = app.hovered_item;
@@ -594,6 +607,7 @@ void handle_motion(AppState& app, int x, int y)
 
 void handle_scroll(AppState& app, int mx, int my, double dy)
 {
+  HS_LOG("handle_scroll: enter mx=%d my=%d dy=%.1f", mx, my, dy);
   if (!app.captured.valid || app.captured.width < 1 || app.captured.height < 1) return;
 
   int pad = 20;

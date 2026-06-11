@@ -1,6 +1,8 @@
 #include "screenshot/ui/button/button.hpp"
 #include "screenshot/app.hpp"
 
+#include "core/logging.hpp"
+
 #include <cairo/cairo.h>
 
 #include <cmath>
@@ -100,6 +102,7 @@ void draw_vista_button(cairo_t* cr, const AppState& app,
                        const char* label, const char* sublabel,
                        bool active, bool hovered, bool pressed)
 {
+  HS_LOG("draw_vista_button: enter label=%s active=%d hovered=%d pressed=%d", label ? label : "(null)", active, hovered, pressed);
   double r = 8.0;
 
   if (active && !pressed) {

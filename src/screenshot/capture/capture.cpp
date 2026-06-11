@@ -60,20 +60,9 @@ static inline float hdr_linear_to_pq(float linear, float max_luminance) {
 }
 #endif
 
-namespace hs::screenshot {
+#include "core/logging.hpp"
 
-static void shot_log(const char* fmt, ...) {
-  va_list ap;
-  va_start(ap, fmt);
-  FILE* f = fopen("/tmp/eh-shot.log", "a");
-  if (f) {
-    fprintf(f, "[capture] ");
-    vfprintf(f, fmt, ap);
-    fprintf(f, "\n");
-    fclose(f);
-  }
-  va_end(ap);
-}
+namespace hs::screenshot {
 
 static void aces_tone_map(float& r, float& g, float& b) {
   float rr = r, gg = g, bb = b;
@@ -238,6 +227,7 @@ bool capture_screen(
     hs::core::WaylandConnection& wl,
     const std::string& out_path)
 {
+  HS_LOG("capture_screen: enter out_path=%s", out_path.c_str());
   auto* display = wl.display();
   auto* shm = wl.shm();
   auto* ext_mgr = wl.ext_image_copy_capture_manager();
@@ -247,26 +237,32 @@ bool capture_screen(
 
   wl.refresh_logical_outputs();
   auto out = wl.pick_largest_logical_output();
-  shot_log("capture_screen: picked output=%p w=%d h=%d",
+  HS_LOG("capture_screen: picked output=%p w=%d h=%d",
            (void*)out.output, out.logical_width, out.logical_height);
-  if (!out.output) { shot_log("capture_screen: no output found"); return false; }
+  if (!out.output) { HS_LOG("capture_screen: no output found"); return false; }
 
   if (ext_mgr && ext_src_mgr) {
-    shot_log("capture_screen: using ext-image-copy-capture");
-    return hs::core::ext_capture_output_to_png(
+    HS_LOG("capture_screen: using ext-image-copy-capture");
+    bool ok = hs::core::ext_capture_output_to_png(
         display, ext_mgr, ext_src_mgr, shm, out.output, false, color_mgr, out_path);
+    HS_LOG("capture_screen: ext-image-copy-capture %s", ok ? "ok" : "FAILED");
+    return ok;
   }
   if (wlr_mgr) {
-    shot_log("capture_screen: using wlr-screencopy");
-    return hs::core::screencopy_output_to_png(
+    HS_LOG("capture_screen: using wlr-screencopy");
+    bool ok = hs::core::screencopy_output_to_png(
         display, wlr_mgr, shm, out.output, false, out_path);
+    HS_LOG("capture_screen: wlr-screencopy %s", ok ? "ok" : "FAILED");
+    return ok;
   }
-  shot_log("capture_screen: no capture method available");
+  HS_LOG("capture_screen: no capture method available");
+  HS_LOG("capture_screen: exit false");
   return false;
 }
 
 std::vector<OutputInfo> list_outputs(hs::core::WaylandConnection& wl)
 {
+  HS_LOG("list_outputs: enter");
   std::vector<OutputInfo> result;
   auto bounds = wl.logical_output_bounds();
   auto* color_mgr = wl.color_manager();
@@ -280,9 +276,10 @@ std::vector<OutputInfo> list_outputs(hs::core::WaylandConnection& wl)
       oi.max_lum = ci.max_lum;
     }
     result.push_back(std::move(oi));
-    shot_log("list_outputs: name=%s x=%d y=%d w=%d h=%d hdr=%d",
+    HS_LOG("list_outputs: name=%s x=%d y=%d w=%d h=%d hdr=%d",
              b.name.c_str(), b.global_x, b.global_y, b.width, b.height, (int)oi.is_hdr);
   }
+  HS_LOG("list_outputs: exit %zu outputs", result.size());
   return result;
 }
 
@@ -314,9 +311,10 @@ bool capture_output(
   auto* ext_src_mgr = wl.ext_output_image_capture_source_manager();
   auto* wlr_mgr = wl.screencopy_manager();
 
-  if (!output) { shot_log("capture_output: null output"); return false; }
+  if (!output) { HS_LOG("capture_output: null output"); return false; }
 
-  shot_log("capture_output: ext_mgr=%d ext_src_mgr=%d wlr_mgr=%d",
+  HS_LOG("capture_output: enter output=%p out_path=%s", (void*)output, out_path.c_str());
+  HS_LOG("capture_output: ext_mgr=%d ext_src_mgr=%d wlr_mgr=%d",
            (int)(ext_mgr != nullptr), (int)(ext_src_mgr != nullptr), (int)(wlr_mgr != nullptr));
 
   bool want_hdr = false;
@@ -325,7 +323,7 @@ bool capture_output(
     auto ci = hs::core::query_output_color_info(display, color_mgr, output);
     want_hdr = ci.is_hdr;
     if (want_hdr) {
-      shot_log("capture_output: output is HDR, using batch-style capture");
+      HS_LOG("capture_output: output is HDR, using batch-style capture");
       std::vector<hs::core::BatchedCaptureOutput> batch(1);
       batch[0].output = output;
 
@@ -334,10 +332,10 @@ bool capture_output(
         batch_ok = hs::core::batch_capture_outputs_ext(display, ext_mgr, ext_src_mgr, shm, batch, false, color_mgr);
       }
       if (batch_ok && batch[0].captured && !batch[0].hdr_linear_rgb.empty()) {
-        shot_log("capture_output: ext batch-style success, hdr_linear=%zu",
+        HS_LOG("capture_output: ext batch-style success, hdr_linear=%zu",
                  batch[0].hdr_linear_rgb.size());
       } else if (batch_ok && batch[0].captured) {
-        shot_log("capture_output: ext returned 8-bit (%zu hdr_linear), retrying wlr with DMA-BUF",
+        HS_LOG("capture_output: ext returned 8-bit (%zu hdr_linear), retrying wlr with DMA-BUF",
                  batch[0].hdr_linear_rgb.size());
         batch[0] = {}; batch[0].output = output;
         batch_ok = false;
@@ -378,7 +376,7 @@ bool capture_output(
           memcpy(rgba.data(), b.rgba_pixels.data(), static_cast<size_t>(w) * h * 4);
         }
         bool wrote = stbi_write_png(out_path.c_str(), w, h, 4, rgba.data(), w * 4) != 0;
-        shot_log("capture_output: batch-style %s, hdr_linear=%zu",
+        HS_LOG("capture_output: batch-style %s, hdr_linear=%zu",
                  wrote ? "success" : "fail", b.hdr_linear_rgb.size());
         return wrote;
       }
@@ -394,7 +392,7 @@ bool capture_output(
             if (capture_output_drm(drm_path.c_str(), output_name.c_str(), drm_hdr)) {
               *out_hdr = std::move(drm_hdr);
               bool wrote = write_preview_from_hdr(*out_hdr, out_path);
-              shot_log("capture_output: DRM bypass %s (%s)",
+              HS_LOG("capture_output: DRM bypass %s (%s)",
                        wrote ? "success" : "preview fail", drm_path.c_str());
               return wrote;
             }
@@ -402,22 +400,26 @@ bool capture_output(
         }
       }
 
-      shot_log("capture_output: batch-style failed, falling to non-HDR path");
+      HS_LOG("capture_output: batch-style failed, falling to non-HDR path");
     }
   }
 
   if (ext_mgr && ext_src_mgr) {
     if (hs::core::ext_capture_output_to_png(
             display, ext_mgr, ext_src_mgr, shm, output, false, nullptr, out_path)) {
-      shot_log("capture_output: ext success");
+      HS_LOG("capture_output: ext success");
       return true;
     }
-    shot_log("capture_output: ext failed, falling through to wlr");
+    HS_LOG("capture_output: ext failed, falling through to wlr");
   }
   if (wlr_mgr) {
-    return hs::core::screencopy_output_to_png(
+    HS_LOG("capture_output: using wlr-screencopy");
+    bool ok = hs::core::screencopy_output_to_png(
         display, wlr_mgr, shm, output, false, out_path);
+    HS_LOG("capture_output: wlr-screencopy %s", ok ? "ok" : "FAILED");
+    return ok;
   }
+  HS_LOG("capture_output: exit false");
   return false;
 }
 
@@ -426,24 +428,26 @@ bool capture_all_screens(
     const std::string& out_path,
     HdrData* out_hdr)
 {
-  shot_log("capture_all_screens: enter out_path=%s", out_path.c_str());
+  HS_LOG("capture_all_screens: enter out_path=%s", out_path.c_str());
 
   wl.refresh_logical_outputs();
   wl_display_roundtrip(wl.display());
   wl_display_roundtrip(wl.display());
   auto outputs = list_outputs(wl);
-  shot_log("capture_all_screens: %zu outputs after list", outputs.size());
-  if (outputs.empty()) { shot_log("capture_all_screens: no outputs"); return false; }
+  HS_LOG("capture_all_screens: %zu outputs after list", outputs.size());
+  if (outputs.empty()) { HS_LOG("capture_all_screens: no outputs"); return false; }
 
   if (outputs.size() == 1) {
-    shot_log("capture_all_screens: single output, delegating to capture_output");
-    return capture_output(wl, outputs[0].output, out_path);
+    HS_LOG("capture_all_screens: single output, delegating to capture_output");
+    bool single_ok = capture_output(wl, outputs[0].output, out_path);
+    HS_LOG("capture_all_screens: single output result=%d", single_ok);
+    return single_ok;
   }
 
   int min_x = outputs[0].global_x, min_y = outputs[0].global_y;
   int max_x = min_x + outputs[0].width, max_y = min_y + outputs[0].height;
   for (const auto& o : outputs) {
-    shot_log("capture_all_screens: output %s @(%d,%d) %dx%d",
+    HS_LOG("capture_all_screens: output %s @(%d,%d) %dx%d",
              o.name.c_str(), o.global_x, o.global_y, o.width, o.height);
     min_x = (std::min)(min_x, o.global_x);
     min_y = (std::min)(min_y, o.global_y);
@@ -452,7 +456,7 @@ bool capture_all_screens(
   }
   int canvas_w = max_x - min_x;
   int canvas_h = max_y - min_y;
-  shot_log("capture_all_screens: canvas %dx%d (min=(%d,%d))", canvas_w, canvas_h, min_x, min_y);
+  HS_LOG("capture_all_screens: canvas %dx%d (min=(%d,%d))", canvas_w, canvas_h, min_x, min_y);
 
   auto fill_batch = [&]() {
     std::vector<hs::core::BatchedCaptureOutput> batch;
@@ -549,11 +553,11 @@ bool capture_all_screens(
 
     for (const auto& b : batch) {
       if (!b.captured) {
-        shot_log("composite: skipping uncaptured output @(%d,%d) %dx%d",
+        HS_LOG("composite: skipping uncaptured output @(%d,%d) %dx%d",
                  b.logical_x, b.logical_y, b.logical_w, b.logical_h);
         continue;
       }
-      shot_log("composite: output @(%d,%d) %dx%d native=%dx%d",
+      HS_LOG("composite: output @(%d,%d) %dx%d native=%dx%d",
                b.logical_x, b.logical_y, b.logical_w, b.logical_h,
                b.native_w, b.native_h);
 
@@ -575,51 +579,51 @@ bool capture_all_screens(
   auto* wlr_mgr = wl.screencopy_manager();
   auto* color_mgr = wl.color_manager();
   if (wlr_mgr) {
-    shot_log("capture_all_screens: trying batch wlr-screencopy");
+    HS_LOG("capture_all_screens: trying batch wlr-screencopy");
     auto batch = fill_batch();
     if (hs::core::batch_capture_outputs(wl.display(), wlr_mgr, wl.shm(), batch, false, color_mgr,
                                             wl.linux_dmabuf())) {
-      shot_log("capture_all_screens: batch wlr success");
+      HS_LOG("capture_all_screens: batch wlr success");
       return composite_batch(batch);
     }
-    shot_log("capture_all_screens: batch wlr failed");
+    HS_LOG("capture_all_screens: batch wlr failed");
   } else {
-    shot_log("capture_all_screens: no wlr screencopy manager");
+    HS_LOG("capture_all_screens: no wlr screencopy manager");
   }
 
   auto* ext_mgr = wl.ext_image_copy_capture_manager();
   auto* ext_src_mgr = wl.ext_output_image_capture_source_manager();
   if (ext_mgr && ext_src_mgr) {
-    shot_log("capture_all_screens: trying batch ext-image-copy-capture");
+    HS_LOG("capture_all_screens: trying batch ext-image-copy-capture");
     auto batch = fill_batch();
     if (hs::core::batch_capture_outputs_ext(
             wl.display(), ext_mgr, ext_src_mgr, wl.shm(), batch, false, color_mgr)) {
-      shot_log("capture_all_screens: batch ext success");
+      HS_LOG("capture_all_screens: batch ext success");
       return composite_batch(batch);
     }
-    shot_log("capture_all_screens: batch ext failed");
+    HS_LOG("capture_all_screens: batch ext failed");
   } else {
-    shot_log("capture_all_screens: ext_mgr=%d ext_src_mgr=%d",
+    HS_LOG("capture_all_screens: ext_mgr=%d ext_src_mgr=%d",
              (int)(ext_mgr != nullptr), (int)(ext_src_mgr != nullptr));
   }
 
-  shot_log("capture_all_screens: falling back to sequential capture");
+  HS_LOG("capture_all_screens: falling back to sequential capture");
   cairo_surface_t* canvas = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, canvas_w, canvas_h);
   cairo_t* cr = cairo_create(canvas);
 
   auto* display = wl.display();
 
   for (const auto& o : outputs) {
-    shot_log("capture_all_screens: sequential capture of %s @(%d,%d)",
+    HS_LOG("capture_all_screens: sequential capture of %s @(%d,%d)",
              o.name.c_str(), o.global_x, o.global_y);
     char tmp_pattern[] = "/tmp/eh-shot-all-XXXXXX";
     int fd = mkstemp(tmp_pattern);
-    if (fd < 0) { shot_log("capture_all_screens: mkstemp failed for %s", o.name.c_str()); continue; }
+    if (fd < 0) { HS_LOG("capture_all_screens: mkstemp failed for %s", o.name.c_str()); continue; }
     std::string tmp_path(tmp_pattern);
     close(fd);
 
     if (!capture_output(wl, o.output, tmp_path)) {
-      shot_log("capture_all_screens: capture_output failed for %s", o.name.c_str());
+      HS_LOG("capture_all_screens: capture_output failed for %s", o.name.c_str());
       unlink(tmp_path.c_str());
       wl_display_dispatch_pending(display);
       wl_display_roundtrip(display);
@@ -633,10 +637,10 @@ bool capture_all_screens(
     unsigned char* px = stbi_load(tmp_path.c_str(), &native_w, &native_h, nullptr, 4);
     unlink(tmp_path.c_str());
     if (!px) {
-      shot_log("capture_all_screens: stbi_load failed for %s", o.name.c_str());
+      HS_LOG("capture_all_screens: stbi_load failed for %s", o.name.c_str());
       continue;
     }
-    shot_log("capture_all_screens: %s loaded native=%dx%d", o.name.c_str(), native_w, native_h);
+    HS_LOG("capture_all_screens: %s loaded native=%dx%d", o.name.c_str(), native_w, native_h);
 
     rgba_to_argb32_premul(px, native_w, native_h);
     cairo_surface_t* img = cairo_image_surface_create_for_data(
@@ -685,8 +689,9 @@ bool capture_all_screens(
   }
 
   bool ok = stbi_write_png(out_path.c_str(), canvas_w, canvas_h, 4, rgba.data(), canvas_w * 4) != 0;
-  shot_log("capture_all_screens: sequential png write %s", ok ? "ok" : "FAILED");
+  HS_LOG("capture_all_screens: sequential png write %s", ok ? "ok" : "FAILED");
   cairo_surface_destroy(canvas);
+  HS_LOG("capture_all_screens: exit ok=%d", ok);
   return ok;
 }
 
@@ -694,25 +699,31 @@ bool capture_focused_window(
     hs::core::WaylandConnection& wl,
     const std::string& out_path)
 {
+  HS_LOG("capture_focused_window: enter out_path=%s", out_path.c_str());
   auto* display = wl.display();
   auto* shm = wl.shm();
   auto* ext_mgr = wl.ext_image_copy_capture_manager();
   auto* toplevel_src_mgr = wl.ext_foreign_toplevel_image_capture_source_manager();
 
-  shot_log("capture_focused_window: ext_mgr=%d toplevel_src_mgr=%d",
+  HS_LOG("capture_focused_window: ext_mgr=%d toplevel_src_mgr=%d",
            (int)(ext_mgr != nullptr), (int)(toplevel_src_mgr != nullptr));
-  if (!ext_mgr || !toplevel_src_mgr) { shot_log("capture_focused_window: missing ext manager"); return false; }
-  if (!wl.has_ext_foreign_toplevel_list()) { shot_log("capture_focused_window: no ext toplevel list"); return false; }
+  if (!ext_mgr || !toplevel_src_mgr) {
+    HS_LOG("capture_focused_window: missing ext manager - falling back to screen capture");
+    return capture_screen(wl, out_path);
+  }
+  if (!wl.has_ext_foreign_toplevel_list()) { HS_LOG("capture_focused_window: no ext toplevel list"); return false; }
 
   wl_display_roundtrip(display);
 
   const auto& toplevels = wl.ext_foreign_toplevels().list();
-  shot_log("capture_focused_window: %zu toplevels found", toplevels.size());
-  if (toplevels.empty()) { shot_log("capture_focused_window: no toplevels"); return false; }
+  HS_LOG("capture_focused_window: %zu toplevels found", toplevels.size());
+  if (toplevels.empty()) { HS_LOG("capture_focused_window: no toplevels"); return false; }
 
-  return hs::core::ext_capture_toplevel_to_png(
+  bool ok = hs::core::ext_capture_toplevel_to_png(
       display, ext_mgr, toplevel_src_mgr,
       toplevels[0].handle, shm, false, out_path);
+  HS_LOG("capture_focused_window: exit ok=%d", ok);
+  return ok;
 }
 
 bool capture_window_by_handle(
@@ -720,17 +731,23 @@ bool capture_window_by_handle(
     ext_foreign_toplevel_handle_v1* handle,
     const std::string& out_path)
 {
+  HS_LOG("capture_window_by_handle: enter handle=%p out_path=%s", (void*)handle, out_path.c_str());
   auto* display = wl.display();
   auto* shm = wl.shm();
   auto* ext_mgr = wl.ext_image_copy_capture_manager();
   auto* toplevel_src_mgr = wl.ext_foreign_toplevel_image_capture_source_manager();
 
-  shot_log("capture_window_by_handle: handle=%p ext_mgr=%d toplevel_src_mgr=%d",
+  HS_LOG("capture_window_by_handle: handle=%p ext_mgr=%d toplevel_src_mgr=%d",
            (void*)handle, (int)(ext_mgr != nullptr), (int)(toplevel_src_mgr != nullptr));
-  if (!ext_mgr || !toplevel_src_mgr || !handle) { shot_log("capture_window_by_handle: missing manager or handle"); return false; }
+  if (!ext_mgr || !toplevel_src_mgr || !handle) {
+    HS_LOG("capture_window_by_handle: missing manager or handle - falling back to screen capture");
+    return capture_screen(wl, out_path);
+  }
 
-  return hs::core::ext_capture_toplevel_to_png(
+  bool ok = hs::core::ext_capture_toplevel_to_png(
       display, ext_mgr, toplevel_src_mgr, handle, shm, false, out_path);
+  HS_LOG("capture_window_by_handle: exit ok=%d", ok);
+  return ok;
 }
 
 struct SelOverlay {
@@ -761,8 +778,9 @@ struct SelState {
 };
 
 static void sel_overlay_configure(void* data, zwlr_layer_surface_v1* ls,
-                                   uint32_t serial, uint32_t w, uint32_t h)
+                                    uint32_t serial, uint32_t w, uint32_t h)
 {
+  HS_LOG("sel_overlay_configure: serial=%u w=%u h=%u", serial, w, h);
   zwlr_layer_surface_v1_ack_configure(ls, serial);
   auto* state = static_cast<SelState*>(data);
   for (auto& o : state->overlays) {
@@ -776,6 +794,7 @@ static void sel_overlay_configure(void* data, zwlr_layer_surface_v1* ls,
 
 static void sel_overlay_closed(void* data, zwlr_layer_surface_v1*)
 {
+  HS_LOG("sel_overlay_closed");
   auto* state = static_cast<SelState*>(data);
   state->cancelled = true;
   state->done = true;
@@ -790,6 +809,7 @@ static void sel_pointer_enter(void* data, wl_pointer*, uint32_t, wl_surface* sur
                               wl_fixed_t sx, wl_fixed_t sy)
 {
   auto* state = static_cast<SelState*>(data);
+  HS_LOG("sel_pointer_enter: surf=%p sx=%d sy=%d", (void*)surf, wl_fixed_to_int(sx), wl_fixed_to_int(sy));
   state->last_enter_idx = -1;
   for (size_t i = 0; i < state->overlays.size(); ++i) {
     if (state->overlays[i].surface == surf) {
@@ -805,6 +825,7 @@ static void sel_pointer_motion(void* data, wl_pointer*, uint32_t,
                                 wl_fixed_t sx, wl_fixed_t sy)
 {
   auto* state = static_cast<SelState*>(data);
+  HS_LOG("sel_pointer_motion: sx=%d sy=%d", wl_fixed_to_int(sx), wl_fixed_to_int(sy));
   if (state->last_enter_idx < 0) return;
   const auto& o = state->overlays[state->last_enter_idx];
   state->cur_gx = o.global_x + wl_fixed_to_int(sx);
@@ -816,9 +837,10 @@ static void sel_pointer_motion(void* data, wl_pointer*, uint32_t,
 }
 
 static void sel_pointer_button(void* data, wl_pointer*, uint32_t, uint32_t,
-                               uint32_t button, uint32_t state)
+                                uint32_t button, uint32_t state)
 {
   auto* s = static_cast<SelState*>(data);
+  HS_LOG("sel_pointer_button: button=%u state=%u", button, state);
   if (button == 273) { if (state) s->cancelled = true; s->done = true; return; }
   if (button != 272) return;
   if (state) {
@@ -843,6 +865,7 @@ static void sel_pointer_button(void* data, wl_pointer*, uint32_t, uint32_t,
 
 static void sel_render_frame(SelState* state)
 {
+  HS_LOG("sel_render_frame: enter dragging=%d overlays=%zu", state->dragging, state->overlays.size());
   for (auto& o : state->overlays) {
     uint32_t* data = o.shm_data[o.front];
     uint32_t dark = 0x44000000;
@@ -898,6 +921,7 @@ skip_selection:
 
 static void sel_cleanup(SelState& state)
 {
+  HS_LOG("sel_cleanup: enter");
   if (state.pointer) wl_pointer_destroy(state.pointer);
   if (state.keyboard) wl_keyboard_destroy(state.keyboard);
   for (auto& o : state.overlays) {
@@ -915,19 +939,20 @@ bool capture_selection_interactive(
     const std::vector<hs::core::LogicalOutputBounds>& all_bounds,
     const std::string& out_path)
 {
+  HS_LOG("capture_selection_interactive: enter out_path=%s", out_path.c_str());
   auto* display = wl.display();
   auto* compositor = wl.compositor();
   auto* shm = wl.shm();
   auto* layer_shell = wl.layer_shell();
   auto* seat = wl.seat();
 
-  shot_log("capture_selection_interactive: %zu bounds", all_bounds.size());
+  HS_LOG("capture_selection_interactive: %zu bounds", all_bounds.size());
   for (const auto& b : all_bounds) {
-    shot_log("  bound: name=%s output=%p @(%d,%d) %dx%d",
+    HS_LOG("  bound: name=%s output=%p @(%d,%d) %dx%d",
              b.name.c_str(), (void*)b.output, b.global_x, b.global_y, b.width, b.height);
   }
   if (!layer_shell || !compositor || !shm || !seat) {
-    shot_log("capture_selection_interactive: missing required globals");
+    HS_LOG("capture_selection_interactive: missing required globals");
     return false;
   }
 
@@ -941,12 +966,13 @@ bool capture_selection_interactive(
     o.global_x = b.global_x;
     o.global_y = b.global_y;
     o.surface = wl_compositor_create_surface(compositor);
-    if (!o.surface) { sel_cleanup(state); return false; }
+    if (!o.surface) { HS_LOG("capture_selection_interactive: wl_compositor_create_surface failed"); sel_cleanup(state); return false; }
 
     o.layer = zwlr_layer_shell_v1_get_layer_surface(
         layer_shell, o.surface, b.output,
         ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "horizon-shot-sel");
     if (!o.layer) {
+      HS_LOG("capture_selection_interactive: zwlr_layer_shell_v1_get_layer_surface failed");
       wl_surface_destroy(o.surface);
       sel_cleanup(state);
       return false;
@@ -963,21 +989,21 @@ bool capture_selection_interactive(
     state.overlays.push_back(std::move(o));
   }
 
-  if (state.overlays.empty()) return false;
+  if (state.overlays.empty()) { HS_LOG("capture_selection_interactive: no overlays created"); return false; }
   wl_display_flush(display);
   wl_display_roundtrip(display);
 
   for (auto& o : state.overlays) {
-    if (o.buf_w <= 0 || o.buf_h <= 0) { sel_cleanup(state); return false; }
+    if (o.buf_w <= 0 || o.buf_h <= 0) { HS_LOG("capture_selection_interactive: overlay bad buf %dx%d", o.buf_w, o.buf_h); sel_cleanup(state); return false; }
     o.shm_size = o.buf_w * 4 * o.buf_h;
     int total = o.shm_size * 2;
     int fd = memfd_create("wl-shm", MFD_CLOEXEC);
-    if (fd < 0) { sel_cleanup(state); return false; }
-    if (ftruncate(fd, total) < 0) { close(fd); sel_cleanup(state); return false; }
+    if (fd < 0) { HS_LOG("capture_selection_interactive: memfd_create failed"); sel_cleanup(state); return false; }
+    if (ftruncate(fd, total) < 0) { HS_LOG("capture_selection_interactive: ftruncate failed errno=%d", errno); close(fd); sel_cleanup(state); return false; }
     o.shm_data[0] = static_cast<uint32_t*>(
         mmap(nullptr, static_cast<std::size_t>(total),
              PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
-    if (!o.shm_data[0] || o.shm_data[0] == MAP_FAILED) { close(fd); sel_cleanup(state); return false; }
+    if (!o.shm_data[0] || o.shm_data[0] == MAP_FAILED) { HS_LOG("capture_selection_interactive: mmap failed"); close(fd); sel_cleanup(state); return false; }
     o.shm_data[1] = reinterpret_cast<uint32_t*>(
         reinterpret_cast<uint8_t*>(o.shm_data[0]) + o.shm_size);
     wl_shm_pool* pool = wl_shm_create_pool(shm, fd, total);
@@ -1052,9 +1078,9 @@ bool capture_selection_interactive(
 
   sel_cleanup(state);
 
-  if (state.cancelled) { shot_log("capture_selection_interactive: cancelled by user"); return false; }
+  if (state.cancelled) { HS_LOG("capture_selection_interactive: cancelled by user"); return false; }
 
-  shot_log("capture_selection_interactive: result rect (%d,%d) %dx%d",
+  HS_LOG("capture_selection_interactive: result rect (%d,%d) %dx%d",
            state.result_x, state.result_y, state.result_w, state.result_h);
 
   int rx = state.result_x, ry = state.result_y;
@@ -1083,9 +1109,9 @@ bool capture_selection_interactive(
     std::string tmp_path(tmp_pattern);
     close(fd);
 
-    shot_log("  capturing %s @(%d,%d) %dx%d", b.name.c_str(), ox, oy, ow, oh);
+    HS_LOG("  capturing %s @(%d,%d) %dx%d", b.name.c_str(), ox, oy, ow, oh);
     if (!capture_output(wl, b.output, tmp_path)) {
-      shot_log("  capture_output failed for %s", b.name.c_str());
+      HS_LOG("  capture_output failed for %s", b.name.c_str());
       unlink(tmp_path.c_str());
       continue;
     }
@@ -1122,13 +1148,13 @@ bool capture_selection_interactive(
     pieces.push_back(std::move(pc));
   }
 
-  shot_log("capture_selection: %zu pieces captured", pieces.size());
-  if (pieces.empty()) { shot_log("capture_selection: no pieces captured"); return false; }
+  HS_LOG("capture_selection: %zu pieces captured", pieces.size());
+  if (pieces.empty()) { HS_LOG("capture_selection: no pieces captured"); return false; }
 
   if (pieces.size() == 1) {
     bool ok = stbi_write_png(out_path.c_str(), pieces[0].w, pieces[0].h, 4,
                              pieces[0].rgba.data(), pieces[0].w * 4) != 0;
-    shot_log("capture_selection: single piece png %s", ok ? "ok" : "FAILED");
+    HS_LOG("capture_selection: single piece png %s", ok ? "ok" : "FAILED");
     return ok;
   }
 
@@ -1190,13 +1216,15 @@ bool capture_selection_interactive(
   }
 
   bool ok = stbi_write_png(out_path.c_str(), rw, rh, 4, sel_rgba.data(), rw * 4) != 0;
-  shot_log("capture_selection: multi-output stitch png %s", ok ? "ok" : "FAILED");
+  HS_LOG("capture_selection: multi-output stitch png %s", ok ? "ok" : "FAILED");
   cairo_surface_destroy(sel_canvas);
+  HS_LOG("capture_selection_interactive: exit ok=%d", ok);
   return ok;
 }
 
 bool write_preview_from_hdr(const HdrData& hdr, const std::string& out_path)
 {
+  HS_LOG("write_preview_from_hdr: enter w=%d h=%d valid=%d", hdr.width, hdr.height, hdr.valid);
   if (!hdr.valid || hdr.linear_rgb.empty() || hdr.width <= 0 || hdr.height <= 0) return false;
 
   auto linear_to_sdr = [](float c) -> float {
@@ -1221,15 +1249,18 @@ bool write_preview_from_hdr(const HdrData& hdr, const std::string& out_path)
       dst[x * 4 + 3] = 255;
     }
   }
-  return stbi_write_png(out_path.c_str(), hdr.width, hdr.height, 4, rgba.data(), hdr.width * 4) != 0;
+  bool ok = stbi_write_png(out_path.c_str(), hdr.width, hdr.height, 4, rgba.data(), hdr.width * 4) != 0;
+  HS_LOG("write_preview_from_hdr: exit ok=%d", ok);
+  return ok;
 }
 
 CapturedImage load_capture(const std::string& path)
 {
+  HS_LOG("load_capture: enter path=%s", path.c_str());
   CapturedImage result;
   int w = 0, h = 0;
   unsigned char* pixels = stbi_load(path.c_str(), &w, &h, nullptr, 4);
-  if (!pixels) return result;
+  if (!pixels) { HS_LOG("load_capture: stbi_load failed for %s", path.c_str()); return result; }
 
   rgba_to_argb32_premul(pixels, w, h);
 
@@ -1239,6 +1270,7 @@ CapturedImage load_capture(const std::string& path)
   result.pixels.assign(pixels, pixels + size);
   result.valid = true;
   stbi_image_free(pixels);
+  HS_LOG("load_capture: exit valid=true w=%d h=%d", w, h);
   return result;
 }
 
@@ -1271,7 +1303,8 @@ static void compose_frame(cairo_t* cr, int img_w, int img_h, const FrameSettings
 
 bool save_composed_png(const CapturedImage& img, const FrameSettings& frame, const std::string& out_path)
 {
-  if (!img.valid || img.width <= 0 || img.height <= 0) return false;
+  HS_LOG("save_composed_png: enter out_path=%s img=%dx%d", out_path.c_str(), img.width, img.height);
+  if (!img.valid || img.width <= 0 || img.height <= 0) { HS_LOG("save_composed_png: invalid image"); return false; }
 
   int pad = frame.inset;
   int out_w = img.width + pad * 2;
@@ -1330,6 +1363,7 @@ bool save_composed_png(const CapturedImage& img, const FrameSettings& frame, con
 
   cairo_destroy(cr);
   cairo_surface_destroy(surf);
+  HS_LOG("save_composed_png: exit ok=%d", ok);
   return ok;
 }
 

@@ -123,7 +123,8 @@ struct AppState {
   std::string status;
   std::string last_capture_path;
 
-  bool ext_toplevel_available = false;
+  bool toplevel_available = false;
+  int refresh_counter = 0;
 };
 
 int run_screenshot_app(bool select_on_launch = false);
