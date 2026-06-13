@@ -8,6 +8,7 @@ horizon-shot -s, --select        Interactive region selection
 horizon-shot -f, --focused       Capture focused window
 horizon-shot -a, --all           Capture all screens
 horizon-shot -o, --output NAME   Capture a specific output by name
+horizon-shot -w, --window [ID]   Capture a window by index, app_id, or title
 ```
 
 ## Frame options
@@ -33,7 +34,9 @@ Without `--copy` or `--output-file`, captures are saved to `/tmp/horizon-shot-XX
 ## Utility
 
 ```
---list-outputs   List available outputs (name, resolution, position)
+--list-windows    List all open windows with index, app_id, and title
+--list-outputs    List available outputs (name, resolution, position)
+--hdr             Capture HDR linear data (exports as JXL or PNG16)
 -h, --help       Show help and exit
 ```
 
@@ -60,10 +63,35 @@ horizon-shot --select --copy
 
 # Full screen capture with custom padding and save to a file
 horizon-shot --inset 16 -O ~/screenshot.png
+
+# List windows and capture by index
+horizon-shot --list-windows
+horizon-shot --window 0 -O ~/window.png
+
+# Capture a window by app_id substring
+horizon-shot --window code -O ~/code.png
+
+# Capture with HDR data
+horizon-shot --hdr -O ~/shot.jxl
 ```
 
-## Notes
+## CLI limitations
 
-- **Window mode** (`--window`) is only available from the interactive GUI — it opens a window picker UI.
-- Frame options (`--border`, `--no-shadow`, etc.) only apply in non-interactive CLI modes (`--select`, `--focused`, `--all`, `--output`). In GUI mode, the "capture" button computes them at export time.
-- If no output path is given and `--copy` is not set, the path is printed to stdout.
+These features are only available in the interactive GUI (run `horizon-shot` with no arguments):
+
+| Missing from CLI | Available in GUI |
+|---|---|
+| **Window activation before capture** | Activates the selected window via `zwlr_foreign_toplevel_handle_v1_activate` |
+| **Output picker** (choose which screen) | Interactive output list with "All Screens" toggle |
+| **HDR/10bit badges** | Shows HDR capabilities per output in the list |
+| **Preview with zoom/pan** | Scroll to zoom, drag to pan the captured image |
+| **File chooser dialog** (Save / Save As) | Opens an interactive save dialog |
+| **Auto-copy to clipboard** | Every capture is automatically copied |
+| **Periodic window list refresh** | Event loop re-checks for new/closed windows |
+| **Status bar** | Shows "Ready", "Captured", error messages, etc. |
+| **App icons in window list** | Loads themed icons for each app |
+| **Matugen dynamic theming** | Follows the desktop shell colour scheme |
+
+`--window`, `--list-windows`, and `--hdr` are now available in CLI mode.
+
+Frame options (`--border`, `--no-shadow`, `--inset`, etc.) work in both CLI and GUI modes. In GUI mode, they're applied at export time via the capture/export buttons.

@@ -11,10 +11,11 @@ static void print_help(const char* prog)
     "Usage: %s [OPTIONS]\n"
     "\n"
     "Capture modes (default: interactive GUI):\n"
-    "  -s, --select         Interactive region selection\n"
-    "  -f, --focused        Capture focused window\n"
-    "  -o, --output <name>  Capture a specific output by name\n"
-    "  -a, --all            Capture all screens (default in GUI)\n"
+    "  -s, --select             Interactive region selection\n"
+    "  -f, --focused            Capture focused window\n"
+    "  -w, --window [SELECTOR]  Capture a window by index, title, or app_id\n"
+    "  -o, --output <name>      Capture a specific output by name\n"
+    "  -a, --all                Capture all screens (default in GUI)\n"
     "\n"
     "Frame options:\n"
     "  --cursor             Include cursor in capture\n"
@@ -27,9 +28,11 @@ static void print_help(const char* prog)
     "Output:\n"
     "  -c, --copy           Copy to clipboard instead of saving\n"
     "  -O, --output-file <path>  Save to specific path\n"
+    "  --hdr                Capture HDR data (requires JXL output or preview)\n"
     "\n"
     "Utility:\n"
     "  --list-outputs       List available outputs and exit\n"
+    "  --list-windows       List available windows and exit\n"
     "  -h, --help           Show this help and exit\n",
     prog);
 }
@@ -91,6 +94,15 @@ int main(int argc, char* argv[])
       opts.frame.shadow = 0;
     } else if (std::strcmp(argv[i], "--no-frame") == 0) {
       opts.frame.hideChrome = true;
+    } else if (std::strcmp(argv[i], "-w") == 0 || std::strcmp(argv[i], "--window") == 0) {
+      opts.mode = hs::screenshot::AppOptions::Window;
+      if (i + 1 < argc && argv[i + 1][0] != '-') {
+        opts.window_selector = argv[++i];
+      }
+    } else if (std::strcmp(argv[i], "--list-windows") == 0) {
+      opts.list_windows = true;
+    } else if (std::strcmp(argv[i], "--hdr") == 0) {
+      opts.capture_hdr = true;
     } else if (std::strcmp(argv[i], "--inset") == 0) {
       if (i + 1 < argc) opts.frame.inset = std::atoi(argv[++i]);
       else { std::cerr << "--inset requires a value\n"; HS_LOG("main: --inset missing value"); return 1; }

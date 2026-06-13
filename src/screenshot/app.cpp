@@ -464,7 +464,7 @@ int run_screenshot_cli(const AppOptions& opts)
 {
   HS_LOG("run_screenshot_cli: enter mode=%d output=%s copy=%d", (int)opts.mode, opts.output_path.c_str(), opts.copy);
 
-  if (opts.mode == AppOptions::Gui) {
+  if (opts.mode == AppOptions::Gui && !opts.list_windows) {
     return run_screenshot_app(false);
   }
 
@@ -487,6 +487,39 @@ int run_screenshot_cli(const AppOptions& opts)
     } else if (wlrMgr) {
       clipboard.bind_wlr(wlrMgr, wl.seat(), wl.display());
     }
+  }
+
+  if (opts.list_windows) {
+    wl_display_roundtrip(wl.display());
+    wl_display_roundtrip(wl.display());
+    wl_display_roundtrip(wl.display());
+
+    if (wl.has_ext_foreign_toplevel_list()) {
+      const auto& toplevels = wl.ext_foreign_toplevels().list();
+      if (toplevels.empty()) {
+        std::cout << "No windows detected.\n";
+      } else {
+        for (size_t i = 0; i < toplevels.size(); ++i) {
+          const auto& tl = toplevels[i];
+          std::cout << i << ": app_id='" << tl.appId << "' title='" << tl.title << "'"
+                    << " identifier='" << tl.identifier << "'\n";
+        }
+      }
+    } else if (wl.has_wlr_foreign_toplevel_manager()) {
+      const auto& toplevels = wl.wlr_foreign_toplevels().list();
+      if (toplevels.empty()) {
+        std::cout << "No windows detected.\n";
+      } else {
+        for (size_t i = 0; i < toplevels.size(); ++i) {
+          const auto& tl = toplevels[i];
+          std::cout << i << ": app_id='" << tl.appId << "' title='" << tl.title << "'"
+                    << " activated=" << tl.activated << "\n";
+        }
+      }
+    } else {
+      std::cerr << "No toplevel list available from compositor.\n";
+    }
+    return 0;
   }
 
   if (out_path.empty()) {
@@ -512,26 +545,93 @@ int run_screenshot_cli(const AppOptions& opts)
     break;
 
   case AppOptions::Screen:
-    if (!opts.output_name.empty()) {
-      wl.refresh_logical_outputs();
-      auto outputs = list_outputs(wl);
-      wl_output* target = nullptr;
-      for (const auto& o : outputs) {
-        if (o.name == opts.output_name) { target = o.output; break; }
+    {
+      hs::screenshot::HdrData hdr;
+      if (!opts.output_name.empty()) {
+        wl.refresh_logical_outputs();
+        auto outputs = list_outputs(wl);
+        wl_output* target = nullptr;
+        for (const auto& o : outputs) {
+          if (o.name == opts.output_name) { target = o.output; break; }
+        }
+        if (!target) {
+          std::cerr << "Output not found: " << opts.output_name << "\n";
+          return 1;
+        }
+        ok = capture_output(wl, target, out_path, opts.capture_hdr ? &hdr : nullptr);
+      } else {
+        ok = capture_all_screens(wl, out_path, opts.capture_hdr ? &hdr : nullptr);
       }
-      if (!target) {
-        std::cerr << "Output not found: " << opts.output_name << "\n";
-        return 1;
-      }
-      ok = capture_output(wl, target, out_path);
-    } else {
-      ok = capture_all_screens(wl, out_path);
     }
     break;
 
   case AppOptions::Window:
-    std::cerr << "Window mode requires GUI; use horizon-shot without flags.\n";
-    return 1;
+    {
+      wl_display_roundtrip(wl.display());
+      if (!wl.has_ext_foreign_toplevel_list() && !wl.has_wlr_foreign_toplevel_manager()) {
+        std::cerr << "No toplevel list available from compositor.\n";
+        return 1;
+      }
+      wl_display_roundtrip(wl.display());
+      wl_display_roundtrip(wl.display());
+
+      if (opts.window_selector.empty()) {
+        std::cerr << "Use --window <index>, --window <title>, or --window <app_id>.\n";
+        std::cerr << "Use --list-windows to see available windows.\n";
+        return 1;
+      }
+
+      ext_foreign_toplevel_handle_v1* handle = nullptr;
+      bool found = false;
+
+      if (wl.has_ext_foreign_toplevel_list()) {
+        const auto& toplevels = wl.ext_foreign_toplevels().list();
+        char* end = nullptr;
+        long idx = std::strtol(opts.window_selector.c_str(), &end, 10);
+        if (*end == '\0' && idx >= 0 && static_cast<size_t>(idx) < toplevels.size()) {
+          handle = toplevels[idx].handle;
+          found = true;
+        } else {
+          for (size_t i = 0; i < toplevels.size(); ++i) {
+            const auto& tl = toplevels[i];
+            if (tl.appId.find(opts.window_selector) != std::string::npos ||
+                tl.title.find(opts.window_selector) != std::string::npos) {
+              handle = tl.handle;
+              found = true;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!found && wl.has_wlr_foreign_toplevel_manager()) {
+        const auto& toplevels = wl.wlr_foreign_toplevels().list();
+        char* end = nullptr;
+        long idx = std::strtol(opts.window_selector.c_str(), &end, 10);
+        if (*end == '\0' && idx >= 0 && static_cast<size_t>(idx) < toplevels.size()) {
+          handle = nullptr;
+          found = true;
+        } else {
+          for (size_t i = 0; i < toplevels.size(); ++i) {
+            const auto& tl = toplevels[i];
+            if (tl.appId.find(opts.window_selector) != std::string::npos ||
+                tl.title.find(opts.window_selector) != std::string::npos) {
+              handle = nullptr;
+              found = true;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!found) {
+        std::cerr << "No window matching '" << opts.window_selector << "' found.\n";
+        return 1;
+      }
+
+      ok = capture_window_by_handle(wl, handle, out_path);
+    }
+    break;
 
   default:
     break;

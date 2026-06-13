@@ -61,6 +61,9 @@ struct AppOptions {
   std::string output_path;
   std::string output_name;
   FrameSettings frame;
+  std::string window_selector;
+  bool list_windows = false;
+  bool capture_hdr = false;
 };
 
 struct AppState {
