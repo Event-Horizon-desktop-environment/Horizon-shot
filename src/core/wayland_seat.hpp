@@ -62,6 +62,7 @@ private:
       .axis_discrete = ptr_axis_discrete,
       .axis_value120 = ptr_axis_value120,
       .axis_relative_direction = ptr_axis_relative_direction,
+      .warp = nullptr,
   };
 
   wl_seat* seat_ = nullptr;
