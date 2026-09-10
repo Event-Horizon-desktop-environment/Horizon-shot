@@ -2,6 +2,7 @@
 
 #include <cairo/cairo.h>
 
+#include <cstdint>
 #include <list>
 #include <memory>
 #include <string>
